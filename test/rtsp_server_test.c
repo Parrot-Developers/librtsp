@@ -1,6 +1,6 @@
 /**
- * @file rtsp.h
- * @brief Real Time Streaming Protocol library
+ * @file rtsp_server_test.c
+ * @brief Real Time Streaming Protocol library - server test program
  * @date 26/06/2017
  * @author aurelien.barre@akaaba.net
  *
@@ -36,32 +36,89 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _RTSP_H_
-#define _RTSP_H_
-
-#define _GNU_SOURCE
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <netinet/in.h>
+#include <unistd.h>
+#include <signal.h>
+
+#define ULOG_TAG rtsp_server_test
+#include <ulog.h>
+ULOG_DECLARE_TAG(rtsp_server_test);
 
 #include <librtsp.h>
 #include <libpomp.h>
 
-#include "rtsp_log.h"
+
+static int stopping = 0;
+struct pomp_loop *loop = NULL;
 
 
-struct rtsp_server {
-	struct sockaddr_in listen_addr_in;
-	struct pomp_ctx *pomp;
-};
+static void sighandler(int signum)
+{
+	printf("Stopping...\n");
+	ULOGI("Stopping...");
+	stopping = 1;
+	if (loop)
+		pomp_loop_wakeup(loop);
+	signal(SIGINT, SIG_DFL);
+}
 
 
-struct rtsp_client {
-	struct sockaddr_in remote_addr_in;
-	struct pomp_ctx *pomp;
-};
+int main(int argc, char **argv)
+{
+	int ret = EXIT_SUCCESS, err;
+	int port = 0;
+	struct rtsp_server *server = NULL;
 
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s <port>\n", argv[0]);
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
 
-#endif /* !_RTSP_H_ */
+	port = atoi(argv[1]);
+	printf("Starting server on port %d\n", port);
+
+	loop = pomp_loop_new();
+	if (!loop) {
+		ULOGE("pomp_loop_new() failed");
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
+	server = rtsp_server_new(port, loop);
+	if (!server) {
+		ULOGE("rtsp_server_new() failed");
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
+	signal(SIGINT, sighandler);
+	printf("Server listening\n");
+
+	while (!stopping)
+		pomp_loop_wait_and_process(loop, -1);
+
+	printf("Server stopped\n");
+
+cleanup:
+	if (server) {
+		err = rtsp_server_destroy(server);
+		if (err) {
+			ULOGE("rtsp_server_destroy() failed");
+			ret = EXIT_FAILURE;
+		}
+	}
+
+	if (loop) {
+		err = pomp_loop_destroy(loop);
+		if (err) {
+			ULOGE("pomp_loop_destroy() failed");
+			ret = EXIT_FAILURE;
+		}
+	}
+
+	exit(ret);
+}

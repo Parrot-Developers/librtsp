@@ -40,11 +40,121 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <unistd.h>
+#include <signal.h>
+#include <pthread.h>
+
+#define ULOG_TAG rtsp_client_test
+#include <ulog.h>
+ULOG_DECLARE_TAG(rtsp_client_test);
 
 #include <librtsp.h>
+#include <libpomp.h>
+
+
+static int stopping = 0;
+struct pomp_loop *loop = NULL;
+
+
+static void sighandler(int signum)
+{
+	printf("Stopping...\n");
+	ULOGI("Stopping...");
+	stopping = 1;
+	if (loop)
+		pomp_loop_wakeup(loop);
+	signal(SIGINT, SIG_DFL);
+}
+
+
+static void *loop_thread_func(void *user)
+{
+	while(!stopping)
+		pomp_loop_wait_and_process(loop, -1);
+	return NULL;
+}
 
 
 int main(int argc, char **argv)
 {
-	exit(EXIT_SUCCESS);
+	int ret = EXIT_SUCCESS, err;
+	char *url = NULL;
+	struct rtsp_client *client = NULL;
+	pthread_t loop_thread;
+	int loop_thread_init = 0;
+
+	if (argc < 2) {
+		fprintf(stderr, "Usage: %s <url>\n", argv[0]);
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
+	url = argv[1];
+	printf("Starting client on URL %s\n", url);
+
+	loop = pomp_loop_new();
+	if (!loop) {
+		ULOGE("pomp_loop_new() failed");
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
+	client = rtsp_client_new(argv[1], loop);
+	if (!client) {
+		ULOGE("rtsp_client_new() failed");
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
+	err = pthread_create(&loop_thread, NULL, loop_thread_func, NULL);
+	if (err != 0) {
+		ULOGE("pthread_join() failed (%d)", err);
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+	loop_thread_init = 1;
+
+	signal(SIGINT, sighandler);
+	printf("Client running\n");
+
+	while (!stopping) {
+		sleep(1);
+		err = rtsp_client_send_request(client);
+		if (err) {
+			ULOGE("rtsp_client_send_request() failed");
+			ret = EXIT_FAILURE;
+			stopping = 1;
+		}
+	}
+
+	printf("Client stopped\n");
+
+cleanup:
+	if (client) {
+		err = rtsp_client_destroy(client);
+		if (err) {
+			ULOGE("rtsp_client_destroy() failed");
+			ret = EXIT_FAILURE;
+		}
+	}
+
+	stopping = 1;
+	if (loop)
+		pomp_loop_wakeup(loop);
+
+	if (loop_thread_init) {
+		err = pthread_join(loop_thread, NULL);
+		if (err != 0)
+			ULOGE("pthread_join() failed (%d)", err);
+	}
+
+	if (loop) {
+		err = pomp_loop_destroy(loop);
+		if (err) {
+			ULOGE("pomp_loop_destroy() failed");
+			ret = EXIT_FAILURE;
+		}
+	}
+
+	exit(ret);
 }

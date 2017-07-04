@@ -44,6 +44,33 @@ extern "C" {
 #endif /* __cplusplus */
 
 #include <inttypes.h>
+#include <libpomp.h>
+
+
+struct rtsp_server;
+struct rtsp_client;
+
+
+struct rtsp_server *rtsp_server_new(
+	int port,
+	struct pomp_loop *loop);
+
+
+int rtsp_server_destroy(
+	struct rtsp_server *server);
+
+
+struct rtsp_client *rtsp_client_new(
+	const char *url,
+	struct pomp_loop *loop);
+
+
+int rtsp_client_destroy(
+	struct rtsp_client *client);
+
+
+int rtsp_client_send_request(
+	struct rtsp_client *client);
 
 
 #ifdef __cplusplus
