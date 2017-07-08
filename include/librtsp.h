@@ -62,6 +62,7 @@ int rtsp_server_destroy(
 
 struct rtsp_client *rtsp_client_new(
 	const char *url,
+	const char *user_agent,
 	struct pomp_loop *loop);
 
 
@@ -69,7 +70,29 @@ int rtsp_client_destroy(
 	struct rtsp_client *client);
 
 
-int rtsp_client_send_request(
+int rtsp_client_options(
+	struct rtsp_client *client);
+
+
+int rtsp_client_describe(
+	struct rtsp_client *client,
+	char **session_description);
+
+
+int rtsp_client_setup(
+	struct rtsp_client *client,
+	const char *resource_url,
+	int client_stream_port,
+	int client_control_port,
+	int *server_stream_port,
+	int *server_control_port);
+
+
+int rtsp_client_play(
+	struct rtsp_client *client);
+
+
+int rtsp_client_teardown(
 	struct rtsp_client *client);
 
 

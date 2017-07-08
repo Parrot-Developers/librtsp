@@ -37,3 +37,49 @@
  */
 
 #include "rtsp.h"
+
+
+int rtsp_parse_transport_header(char *value, char **transport,
+	int *server_stream_port, int *server_control_port)
+{
+	char *_transport, *param, *temp = NULL;
+	int _server_stream_port = 0, _server_control_port = 0;
+
+	/*TODO: parse all params*/
+
+	_transport = strtok_r(value, ";", &temp);
+	if ((strncmp(_transport, RTSP_TRANSPORT_RTPAVP,
+		strlen(RTSP_TRANSPORT_RTPAVP))) &&
+		(strncmp(_transport,
+			RTSP_TRANSPORT_RTPAVPUDP,
+			strlen(RTSP_TRANSPORT_RTPAVPUDP)))) {
+		RTSP_LOGE("unsupported transport protocol");
+		return -1;
+	}
+
+	param = strtok_r(NULL, ";", &temp);
+	while (param) {
+		char *key, *val, *val2, *temp2;
+		key = strtok_r(param, "=", &temp2);
+		val = strtok_r(NULL, "", &temp2);
+		if ((!strncmp(key, RTSP_TRANSPORT_SERVER_PORT,
+			strlen(RTSP_TRANSPORT_SERVER_PORT))) &&
+			(val)) {
+			val2 = strchr(val, '-');
+			_server_stream_port = atoi(val);
+			_server_control_port = _server_stream_port + 1;
+			if (val2)
+				_server_control_port = atoi(val2 + 1);
+
+		}
+		param = strtok_r(NULL, ";", &temp);
+	}
+
+	if (transport)
+		*transport = _transport;
+	if (server_stream_port)
+		*server_stream_port = _server_stream_port;
+	if (server_control_port)
+		*server_control_port = _server_control_port;
+	return 0;
+}

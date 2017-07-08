@@ -43,6 +43,6 @@ LOCAL_MODULE := rtsp_client_test
 LOCAL_DESCRIPTION := Real Time Streaming Protocol library client test program
 LOCAL_CATEGORY_PATH := multimedia
 LOCAL_SRC_FILES := test/rtsp_client_test.c
-LOCAL_LIBRARIES := librtsp libpomp libulog
+LOCAL_LIBRARIES := librtsp libsdp libpomp libulog
 LOCAL_CFLAGS := -Wextra
 include $(BUILD_EXECUTABLE)
