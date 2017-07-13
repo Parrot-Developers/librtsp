@@ -39,6 +39,14 @@
 #include "rtsp.h"
 
 
+static void rtsp_client_pomp_event_cb(
+	struct pomp_ctx *ctx,
+	enum pomp_event event,
+	struct pomp_conn *conn,
+	const struct pomp_msg *msg,
+	void *userdata);
+
+
 static void rtsp_client_pomp_cb(
 	struct pomp_ctx *ctx,
 	struct pomp_conn *conn,
@@ -63,6 +71,7 @@ struct rtsp_client *rtsp_client_new(
 
 	struct rtsp_client *client = calloc(1, sizeof(*client));
 	RTSP_RETURN_VAL_IF_FAILED(client != NULL, -ENOMEM, NULL);
+	client->tcp_state = RTSP_TCP_STATE_IDLE;
 
 	client->user_agent = (user_agent) ?
 		strdup(user_agent) : strdup(RTSP_CLIENT_DEFAULT_USER_AGENT);
@@ -125,8 +134,21 @@ struct rtsp_client *rtsp_client_new(
 		goto error;
 	}
 
+	ret = pthread_mutex_init(&client->mutex, NULL);
+	if (ret != 0) {
+		RTSP_LOGE("mutex creation failed, aborting");
+		goto error;
+	}
+	mutex_created = 1;
+	ret = pthread_cond_init(&client->cond, NULL);
+	if (ret != 0) {
+		RTSP_LOGE("cond creation failed, aborting");
+		goto error;
+	}
+	cond_created = 1;
+
 	client->pomp = pomp_ctx_new_with_loop(
-		NULL, (void *)client, loop);
+		rtsp_client_pomp_event_cb, (void *)client, loop);
 	if (!client->pomp) {
 		RTSP_LOGE("pomp creation failed, aborting");
 		goto error;
@@ -156,19 +178,6 @@ struct rtsp_client *rtsp_client_new(
 		RTSP_LOG_ERRNO("failed to connect, aborting", -ret);
 		goto error;
 	}
-
-	ret = pthread_mutex_init(&client->mutex, NULL);
-	if (ret != 0) {
-		RTSP_LOGE("mutex creation failed, aborting");
-		goto error;
-	}
-	mutex_created = 1;
-	ret = pthread_cond_init(&client->cond, NULL);
-	if (ret != 0) {
-		RTSP_LOGE("cond creation failed, aborting");
-		goto error;
-	}
-	cond_created = 1;
 
 	return client;
 
@@ -220,8 +229,23 @@ int rtsp_client_options(
 	int ret = 0, err;
 	char *request;
 	struct pomp_buffer *req_buf = NULL;
+	enum rtsp_tcp_state tcp_state;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* wait for connection to be ready */
+	pthread_mutex_lock(&client->mutex);
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		pthread_cond_wait(&client->cond, &client->mutex);
+	}
+	tcp_state = client->tcp_state;
+	pthread_mutex_unlock(&client->mutex);
+
+	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		RTSP_LOGE("connection failed");
+		ret = -1;
+		goto out;
+	}
 
 	/* create request */
 	err = asprintf(&request,
@@ -268,8 +292,22 @@ int rtsp_client_describe(
 	int ret = 0, err;
 	char *request, *sdp = NULL;
 	struct pomp_buffer *req_buf = NULL;
-
+	enum rtsp_tcp_state tcp_state;
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* wait for connection to be ready */
+	pthread_mutex_lock(&client->mutex);
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		pthread_cond_wait(&client->cond, &client->mutex);
+	}
+	tcp_state = client->tcp_state;
+	pthread_mutex_unlock(&client->mutex);
+
+	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		RTSP_LOGE("connection failed");
+		ret = -1;
+		goto out;
+	}
 
 	/* create request */
 	err = asprintf(&request,
@@ -328,11 +366,26 @@ int rtsp_client_setup(
 	int s_stream_port, s_control_port;
 	char *request, *media_url = NULL;
 	struct pomp_buffer *req_buf = NULL;
+	enum rtsp_tcp_state tcp_state;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(resource_url != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_stream_port != 0, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_control_port != 0, -EINVAL);
+
+	/* wait for connection to be ready */
+	pthread_mutex_lock(&client->mutex);
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		pthread_cond_wait(&client->cond, &client->mutex);
+	}
+	tcp_state = client->tcp_state;
+	pthread_mutex_unlock(&client->mutex);
+
+	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		RTSP_LOGE("connection failed");
+		ret = -1;
+		goto out;
+	}
 
 	if (!strncmp(resource_url, RTSP_SCHEME_TCP, strlen(RTSP_SCHEME_TCP))) {
 		media_url = strdup(resource_url);
@@ -421,9 +474,24 @@ int rtsp_client_play(
 	int ret = 0, err;
 	char *request;
 	struct pomp_buffer *req_buf = NULL;
+	enum rtsp_tcp_state tcp_state;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
+
+	/* wait for connection to be ready */
+	pthread_mutex_lock(&client->mutex);
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		pthread_cond_wait(&client->cond, &client->mutex);
+	}
+	tcp_state = client->tcp_state;
+	pthread_mutex_unlock(&client->mutex);
+
+	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		RTSP_LOGE("connection failed");
+		ret = -1;
+		goto out;
+	}
 
 	/* create request */
 	err = asprintf(&request,
@@ -473,9 +541,24 @@ int rtsp_client_teardown(
 	int ret = 0, err;
 	char *request;
 	struct pomp_buffer *req_buf = NULL;
+	enum rtsp_tcp_state tcp_state;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
+
+	/* wait for connection to be ready */
+	pthread_mutex_lock(&client->mutex);
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		pthread_cond_wait(&client->cond, &client->mutex);
+	}
+	tcp_state = client->tcp_state;
+	pthread_mutex_unlock(&client->mutex);
+
+	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
+		RTSP_LOGE("connection failed");
+		ret = -1;
+		goto out;
+	}
 
 	/* create request */
 	err = asprintf(&request,
@@ -514,6 +597,40 @@ out:
 		pomp_buffer_unref(req_buf);
 	free(request);
 	return ret;
+}
+
+
+static void rtsp_client_pomp_event_cb(
+	struct pomp_ctx *ctx,
+	enum pomp_event event,
+	struct pomp_conn *conn,
+	const struct pomp_msg *msg,
+	void *userdata)
+{
+	struct rtsp_client *client = (struct rtsp_client *)userdata;
+
+	switch (event) {
+	case POMP_EVENT_CONNECTED:
+		RTSP_LOGI("client connected");
+		pthread_mutex_lock(&client->mutex);
+		client->tcp_state = RTSP_TCP_STATE_CONNECTED;
+		pthread_mutex_unlock(&client->mutex);
+		pthread_cond_signal(&client->cond);
+		break;
+
+	case POMP_EVENT_DISCONNECTED:
+		RTSP_LOGI("client disconnected");
+		pthread_mutex_lock(&client->mutex);
+		client->tcp_state = RTSP_TCP_STATE_IDLE;
+		pthread_mutex_unlock(&client->mutex);
+		pthread_cond_signal(&client->cond);
+		break;
+
+	default:
+	case POMP_EVENT_MSG:
+		/* never received for raw context */
+		break;
+	}
 }
 
 

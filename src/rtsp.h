@@ -241,6 +241,12 @@
 	"Option Not Supported"
 
 
+enum rtsp_tcp_state {
+	RTSP_TCP_STATE_IDLE = 0,
+	RTSP_TCP_STATE_CONNECTED,
+};
+
+
 struct rtsp_server {
 	struct sockaddr_in listen_addr_in;
 	struct pomp_ctx *pomp;
@@ -250,6 +256,7 @@ struct rtsp_server {
 struct rtsp_client {
 	struct sockaddr_in remote_addr_in;
 	struct pomp_ctx *pomp;
+	enum rtsp_tcp_state tcp_state;
 	unsigned int cseq;
 	char *user_agent;
 	char *content_encoding;
