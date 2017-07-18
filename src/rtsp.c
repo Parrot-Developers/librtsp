@@ -39,11 +39,14 @@
 #include "rtsp.h"
 
 
-int rtsp_parse_transport_header(char *value, char **transport,
-	int *server_stream_port, int *server_control_port)
+static int rtsp_parse_transport_header(char *value,
+	struct rtsp_transport_header *transport)
 {
 	char *_transport, *param, *temp = NULL;
-	int _server_stream_port = 0, _server_control_port = 0;
+	int server_stream_port = 0, server_control_port = 0;
+
+	RTSP_RETURN_ERR_IF_FAILED(value != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(transport != NULL, -EINVAL);
 
 	/*TODO: parse all params*/
 
@@ -66,20 +69,174 @@ int rtsp_parse_transport_header(char *value, char **transport,
 			strlen(RTSP_TRANSPORT_SERVER_PORT))) &&
 			(val)) {
 			val2 = strchr(val, '-');
-			_server_stream_port = atoi(val);
-			_server_control_port = _server_stream_port + 1;
+			server_stream_port = atoi(val);
+			server_control_port = server_stream_port + 1;
 			if (val2)
-				_server_control_port = atoi(val2 + 1);
+				server_control_port = atoi(val2 + 1);
 
 		}
 		param = strtok_r(NULL, ";", &temp);
 	}
 
-	if (transport)
-		*transport = _transport;
-	if (server_stream_port)
-		*server_stream_port = _server_stream_port;
-	if (server_control_port)
-		*server_control_port = _server_control_port;
+	transport->transport = _transport;
+	transport->server_stream_port = server_stream_port;
+	transport->server_control_port = server_control_port;
+
+	return 0;
+}
+
+
+int rtsp_response_header_copy(struct rtsp_response_header *src,
+	struct rtsp_response_header *dst)
+{
+	RTSP_RETURN_ERR_IF_FAILED(src != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(dst != NULL, -EINVAL);
+
+	dst->status_code = src->status_code;
+	dst->status_string = xstrdup(src->status_string);
+	dst->content_length = src->content_length;
+	dst->content_type = xstrdup(src->content_type);
+	dst->content_encoding = xstrdup(src->content_encoding);
+	dst->content_language = xstrdup(src->content_language);
+	dst->content_base = xstrdup(src->content_base);
+	dst->content_location = xstrdup(src->content_location);
+	dst->cseq = src->cseq;
+	dst->session_id = xstrdup(src->session_id);
+	dst->transport.transport = xstrdup(src->transport.transport);
+	dst->transport.server_stream_port = src->transport.server_stream_port;
+	dst->transport.server_control_port = src->transport.server_control_port;
+	dst->body = xstrdup(src->body);
+
+	return 0;
+}
+
+
+int rtsp_response_header_free(struct rtsp_response_header *header)
+{
+	RTSP_RETURN_ERR_IF_FAILED(header != NULL, -EINVAL);
+
+	xfree((void **)&header->status_string);
+	xfree((void **)&header->content_type);
+	xfree((void **)&header->content_encoding);
+	xfree((void **)&header->content_language);
+	xfree((void **)&header->content_base);
+	xfree((void **)&header->content_location);
+	xfree((void **)&header->session_id);
+	xfree((void **)&header->transport.transport);
+	xfree((void **)&header->body);
+
+	return 0;
+}
+
+
+int rtsp_response_header_parse(char *response,
+	struct rtsp_response_header *header)
+{
+	char *p, *temp, *temp2;
+	char *version, *status_code_str;
+
+	RTSP_RETURN_ERR_IF_FAILED(response != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(header != NULL, -EINVAL);
+
+	p = strtok_r(response, "\n", &temp);
+	if (!p) {
+		RTSP_LOGE("invalid response data");
+		return -1;
+	}
+
+	version = strtok_r(p, " ", &temp2);
+	status_code_str = strtok_r(NULL, " ", &temp2);
+	header->status_string = strtok_r(NULL, "\n", &temp2);
+
+	if ((!version) || (strncmp(version, RTSP_VERSION,
+		strlen(RTSP_VERSION)))) {
+		RTSP_LOGE("invalid RTSP protocol version");
+		return -1;
+	}
+	if ((!status_code_str) || (!header->status_string)) {
+		RTSP_LOGE("malformed RTSP response");
+		return -1;
+	}
+	header->status_code = atoi(status_code_str);
+	if (RTSP_STATUS_CLASS(header->status_code) !=
+		RTSP_STATUS_CLASS_SUCCESS) {
+		RTSP_LOGE("RTSP status %d: %s",
+			header->status_code, header->status_string);
+		return -1;
+	}
+
+	p = strtok_r(NULL, "\n", &temp);
+	while (p) {
+		char *field, *value, *p2;
+
+		/* remove the '\r' before '\n' if present */
+		if (p[strlen(p) - 1] == '\r')
+			p[strlen(p) - 1] = '\0';
+
+		if (strlen(p) == 0) {
+			header->body = strtok_r(NULL, "", &temp);
+			break;
+		}
+
+		p2 = strchr(p, ':');
+		if (p2) {
+			*p2 = '\0';
+			field = p;
+			value = p2 + 1;
+			if (*value == ' ')
+				value++;
+
+			if (!strncasecmp(field,
+				RTSP_HEADER_CSEQ,
+				strlen(RTSP_HEADER_CSEQ))) {
+				header->cseq = atoi(value);
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_SESSION,
+				strlen(RTSP_HEADER_SESSION))) {
+				char *p3 = strchr(value, ';');
+				if (p3)
+					*p3 = '\0';
+				header->session_id = value;
+				/*TODO: timeout*/
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_LENGTH,
+				strlen(RTSP_HEADER_CONTENT_LENGTH))) {
+				header->content_length = atoi(value);
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_TYPE,
+				strlen(RTSP_HEADER_CONTENT_TYPE))) {
+				header->content_type = value;
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_ENCODING,
+				strlen(RTSP_HEADER_CONTENT_ENCODING))) {
+				header->content_encoding = value;
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_LANGUAGE,
+				strlen(RTSP_HEADER_CONTENT_LANGUAGE))) {
+				header->content_language = value;
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_BASE,
+				strlen(RTSP_HEADER_CONTENT_BASE))) {
+				header->content_base = value;
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_CONTENT_LOCATION,
+				strlen(RTSP_HEADER_CONTENT_LOCATION))) {
+				header->content_location = value;
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_TRANSPORT,
+				strlen(RTSP_HEADER_TRANSPORT))) {
+				int ret = rtsp_parse_transport_header(value,
+					&header->transport);
+				if (ret != 0) {
+					RTSP_LOGE("failed to parse "
+						"transport header");
+					return -1;
+				}
+			}
+		}
+
+		p = strtok_r(NULL, "\n", &temp);
+	}
+
 	return 0;
 }

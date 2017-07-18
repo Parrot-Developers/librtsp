@@ -217,6 +217,8 @@ int rtsp_client_destroy(
 	free(client->content_base);
 	free(client->content_location);
 	free(client->url);
+	free(client->pending_content);
+	rtsp_response_header_free(&client->current_header);
 	free(client);
 
 	return 0;
@@ -235,9 +237,8 @@ int rtsp_client_options(
 
 	/* wait for connection to be ready */
 	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
 		pthread_cond_wait(&client->cond, &client->mutex);
-	}
 	tcp_state = client->tcp_state;
 	pthread_mutex_unlock(&client->mutex);
 
@@ -297,9 +298,8 @@ int rtsp_client_describe(
 
 	/* wait for connection to be ready */
 	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
 		pthread_cond_wait(&client->cond, &client->mutex);
-	}
 	tcp_state = client->tcp_state;
 	pthread_mutex_unlock(&client->mutex);
 
@@ -375,9 +375,8 @@ int rtsp_client_setup(
 
 	/* wait for connection to be ready */
 	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
 		pthread_cond_wait(&client->cond, &client->mutex);
-	}
 	tcp_state = client->tcp_state;
 	pthread_mutex_unlock(&client->mutex);
 
@@ -481,9 +480,8 @@ int rtsp_client_play(
 
 	/* wait for connection to be ready */
 	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
 		pthread_cond_wait(&client->cond, &client->mutex);
-	}
 	tcp_state = client->tcp_state;
 	pthread_mutex_unlock(&client->mutex);
 
@@ -548,9 +546,8 @@ int rtsp_client_teardown(
 
 	/* wait for connection to be ready */
 	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED) {
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
 		pthread_cond_wait(&client->cond, &client->mutex);
-	}
 	tcp_state = client->tcp_state;
 	pthread_mutex_unlock(&client->mutex);
 
@@ -644,13 +641,8 @@ static void rtsp_client_pomp_cb(
 	int ret;
 	size_t len = 0;
 	const void *cdata = NULL;
-	char *response = NULL, *body = NULL, *p, *temp, *temp2;
-	char *version, *status_code_str, *status_str;
-	char *session_id = NULL;
-	char *content_length = NULL, *content_type = NULL;
-	char *content_encoding = NULL, *content_language = NULL;
-	char *content_base = NULL, *content_location = NULL;
-	int status_code, cseq, server_stream_port = 0, server_control_port = 0;
+	char *response = NULL, *body = NULL;
+	struct rtsp_response_header new_header;
 
 	RTSP_RETURN_IF_FAILED(client != NULL, -EINVAL);
 
@@ -662,151 +654,134 @@ static void rtsp_client_pomp_cb(
 	}
 	response = strdup((const char *)cdata);
 
-	/* parse the response header */
-	p = strtok_r(response, "\n", &temp);
-	if (!p) {
-		RTSP_LOGE("invalid response data");
-		goto error;
-	}
-
-	version = strtok_r(p, " ", &temp2);
-	status_code_str = strtok_r(NULL, " ", &temp2);
-	status_str = strtok_r(NULL, "\n", &temp2);
-
-	if ((!version) || (strncmp(version, RTSP_VERSION,
-		strlen(RTSP_VERSION)))) {
-		RTSP_LOGE("invalid RTSP protocol version");
-		goto error;
-	}
-	if ((!status_code_str) || (!status_str)) {
-		RTSP_LOGE("malformed RTSP response");
-		goto error;
-	}
-	status_code = atoi(status_code_str);
-	if (RTSP_STATUS_CLASS(status_code) != RTSP_STATUS_CLASS_SUCCESS) {
-		RTSP_LOGE("RTSP status %d: %s", status_code, status_str);
-		goto error;
-	}
-
-	p = strtok_r(NULL, "\n", &temp);
-	while (p) {
-		char *field, *value, *p2;
-
-		/* remove the '\r' before '\n' if present */
-		if (p[strlen(p) - 1] == '\r')
-			p[strlen(p) - 1] = '\0';
-
-		if (strlen(p) == 0) {
-			body = strtok_r(NULL, "", &temp);
-			break;
+	if (client->pending_content_length == 0) {
+		/* new message, parse the response header */
+		memset(&new_header, 0, sizeof(new_header));
+		ret = rtsp_response_header_parse(response, &new_header);
+		if (ret != 0) {
+			RTSP_LOGE("failed to parse response header");
+			goto error;
 		}
 
-		p2 = strchr(p, ':');
-		if (p2) {
-			*p2 = '\0';
-			field = p;
-			value = p2 + 1;
-			if (*value == ' ')
-				value++;
-
-			if (!strncmp(field, RTSP_HEADER_CSEQ,
-				strlen(RTSP_HEADER_CSEQ))) {
-				cseq = atoi(value);
-				if (cseq != (signed)client->cseq) {
-					RTSP_LOGE("unexpected Cseq");
-					goto error;
-				}
-			} else if (!strncmp(field, RTSP_HEADER_SESSION,
-				strlen(RTSP_HEADER_SESSION))) {
-				char *p3 = strchr(value, ';');
-				if (p3)
-					*p3 = '\0';
-				session_id = value;
-				/*TODO: timeout*/
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_LENGTH,
-				strlen(RTSP_HEADER_CONTENT_LENGTH))) {
-				content_length = value;
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_TYPE,
-				strlen(RTSP_HEADER_CONTENT_TYPE))) {
-				content_type = value;
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_ENCODING,
-				strlen(RTSP_HEADER_CONTENT_ENCODING))) {
-				content_encoding = value;
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_LANGUAGE,
-				strlen(RTSP_HEADER_CONTENT_LANGUAGE))) {
-				content_language = value;
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_BASE,
-				strlen(RTSP_HEADER_CONTENT_BASE))) {
-				content_base = value;
-			} else if (!strncmp(field, RTSP_HEADER_CONTENT_LOCATION,
-				strlen(RTSP_HEADER_CONTENT_LOCATION))) {
-				content_location = value;
-			} else if (!strncmp(field, RTSP_HEADER_TRANSPORT,
-				strlen(RTSP_HEADER_TRANSPORT))) {
-				char *transport = NULL;
-				ret = rtsp_parse_transport_header(value,
-					&transport, &server_stream_port,
-					&server_control_port);
-				if (ret != 0) {
-					RTSP_LOGE("failed to parse "
-						"transport header");
-					goto error;
-				}
-			}
+		if (new_header.cseq != (signed)client->cseq) {
+			RTSP_LOGE("unexpected Cseq");
+			goto error;
 		}
 
-		p = strtok_r(NULL, "\n", &temp);
-	}
+		ret = rtsp_response_header_free(&client->current_header);
+		if (ret != 0)
+			goto error;
 
-	pthread_mutex_lock(&client->mutex);
-	if (content_encoding) {
-		free(client->content_encoding);
-		client->content_encoding = strdup(content_encoding);
-	}
-	if (content_language) {
-		free(client->content_language);
-		client->content_language = strdup(content_language);
-	}
-	if (content_base) {
-		free(client->content_base);
-		client->content_base = strdup(content_base);
-	}
-	if (content_location) {
-		free(client->content_location);
-		client->content_location = strdup(content_location);
-	}
-	if (session_id) {
-		if (client->session_id) {
-			if (strcmp(session_id, client->session_id)) {
-				pthread_mutex_unlock(&client->mutex);
-				RTSP_LOGE("unexpected session id");
+		ret = rtsp_response_header_copy(&new_header,
+			&client->current_header);
+		if (ret != 0)
+			goto error;
+
+		client->pending_content_length =
+			client->current_header.content_length;
+		client->pending_content_offset = 0;
+		xfree((void **)&client->pending_content);
+		if (client->pending_content_length) {
+			client->pending_content =
+				malloc(client->pending_content_length);
+			if (!client->pending_content) {
+				RTSP_LOGE("allocation failed");
 				goto error;
 			}
-		} else {
-			client->session_id = strdup(session_id);
 		}
-	}
-	if (client->wait_describe_response) {
-		free(client->sdp);
-		client->sdp = NULL;
-		if ((body) && (!strncmp(content_type, RTSP_CONTENT_TYPE_SDP,
-			strlen(RTSP_CONTENT_TYPE_SDP))))
-			client->sdp = strdup(body);
-		client->wait_describe_response = 0;
-	}
-	if (client->wait_setup_response) {
-		client->server_stream_port = server_stream_port;
-		client->server_control_port = server_control_port;
-		client->wait_setup_response = 0;
-	}
-	pthread_mutex_unlock(&client->mutex);
 
-	pthread_cond_signal(&client->cond);
+		body = client->current_header.body;
+	} else {
+		/* continuation */
+		body = response;
+	}
+
+	if ((body) && (strlen(body)) && (client->pending_content_length)) {
+		/* copy the body */
+		int len = ((int)strlen(body) < client->pending_content_length) ?
+			(int)strlen(body) : client->pending_content_length;
+		memcpy(client->pending_content + client->pending_content_offset,
+			body, len);
+		client->pending_content_offset += len;
+		client->pending_content_length -= len;
+	}
+
+	if (client->pending_content_length == 0) {
+		/* message complete */
+		struct rtsp_response_header *header = &client->current_header;
+
+		pthread_mutex_lock(&client->mutex);
+
+		if (header->content_encoding) {
+			xfree((void **)&client->content_encoding);
+			client->content_encoding =
+				xstrdup(header->content_encoding);
+		}
+		if (header->content_language) {
+			xfree((void **)&client->content_language);
+			client->content_language =
+				xstrdup(header->content_language);
+		}
+		if (header->content_base) {
+			xfree((void **)&client->content_base);
+			client->content_base =
+				xstrdup(header->content_base);
+		}
+		if (header->content_location) {
+			xfree((void **)&client->content_location);
+			client->content_location =
+				xstrdup(header->content_location);
+		}
+		if (header->session_id) {
+			if (client->session_id) {
+				if (strcmp(header->session_id,
+					client->session_id)) {
+					pthread_mutex_unlock(&client->mutex);
+					RTSP_LOGE("unexpected session id");
+					goto error;
+				}
+			} else {
+				client->session_id = strdup(header->session_id);
+			}
+		}
+
+		if (client->wait_describe_response) {
+			xfree((void **)&client->sdp);
+			if ((client->pending_content) &&
+				(header->content_type) &&
+				(!strncmp(header->content_type,
+				RTSP_CONTENT_TYPE_SDP,
+				strlen(RTSP_CONTENT_TYPE_SDP))))
+				client->sdp = strdup(client->pending_content);
+			client->wait_describe_response = 0;
+		}
+
+		if (client->wait_setup_response) {
+			client->server_stream_port =
+				header->transport.server_stream_port;
+			client->server_control_port =
+				header->transport.server_control_port;
+			client->wait_setup_response = 0;
+		}
+
+		pthread_mutex_unlock(&client->mutex);
+
+		pthread_cond_signal(&client->cond);
+
+		xfree((void **)&client->pending_content);
+		ret = rtsp_response_header_free(&client->current_header);
+		if (ret != 0)
+			goto error;
+	}
+
 	free(response);
 	return;
 
 error:
 	pthread_cond_signal(&client->cond);
+	xfree((void **)&client->pending_content);
+	client->pending_content_length = 0;
+	rtsp_response_header_free(&client->current_header);
 	free(response);
 	pomp_conn_disconnect(conn);
 	return;

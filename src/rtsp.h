@@ -247,6 +247,29 @@ enum rtsp_tcp_state {
 };
 
 
+struct rtsp_transport_header {
+	char *transport;
+	int server_stream_port;
+	int server_control_port;
+};
+
+
+struct rtsp_response_header {
+	int status_code;
+	char *status_string;
+	int content_length;
+	char *content_type;
+	char *content_encoding;
+	char *content_language;
+	char *content_base;
+	char *content_location;
+	int cseq;
+	char *session_id;
+	struct rtsp_transport_header transport;
+	char *body;
+};
+
+
 struct rtsp_server {
 	struct sockaddr_in listen_addr_in;
 	struct pomp_ctx *pomp;
@@ -275,10 +298,36 @@ struct rtsp_client {
 	pthread_cond_t cond;
 	int wait_describe_response;
 	int wait_setup_response;
+	int pending_content_length;
+	int pending_content_offset;
+	char *pending_content;
+	struct rtsp_response_header current_header;
 };
 
 
-int rtsp_parse_transport_header(char *value, char **transport,
-	int *server_stream_port, int *server_control_port);
+int rtsp_response_header_copy(struct rtsp_response_header *src,
+	struct rtsp_response_header *dst);
+
+
+int rtsp_response_header_free(struct rtsp_response_header *header);
+
+
+int rtsp_response_header_parse(char *response,
+	struct rtsp_response_header *header);
+
+
+static inline void xfree(void **ptr)
+{
+	if (ptr) {
+		free(*ptr);
+		*ptr = NULL;
+	}
+}
+
+
+static inline char *xstrdup(const char *s)
+{
+	return s == NULL ? NULL : strdup(s);
+}
 
 #endif /* !_RTSP_H_ */
