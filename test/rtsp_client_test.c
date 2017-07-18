@@ -104,6 +104,13 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
+	client = rtsp_client_new(url, NULL, loop);
+	if (!client) {
+		ULOGE("rtsp_client_new() failed");
+		ret = EXIT_FAILURE;
+		goto cleanup;
+	}
+
 	err = pthread_create(&loop_thread, NULL, loop_thread_func, NULL);
 	if (err != 0) {
 		ULOGE("pthread_join() failed (%d)", err);
@@ -111,13 +118,6 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 	loop_thread_init = 1;
-
-	client = rtsp_client_new(url, NULL, loop);
-	if (!client) {
-		ULOGE("rtsp_client_new() failed");
-		ret = EXIT_FAILURE;
-		goto cleanup;
-	}
 
 	signal(SIGINT, sighandler);
 	printf("Client is running\n");
