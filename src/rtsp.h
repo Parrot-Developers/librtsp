@@ -47,9 +47,12 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <limits.h>
 
 #include <librtsp.h>
 #include <libpomp.h>
+#include <futils/futils.h>
 
 #include "rtsp_log.h"
 
@@ -279,6 +282,8 @@ struct rtsp_server {
 struct rtsp_client {
 	struct sockaddr_in remote_addr_in;
 	struct pomp_ctx *pomp;
+	struct mbox *mbox;
+	unsigned int max_msg_size;
 	enum rtsp_tcp_state tcp_state;
 	unsigned int cseq;
 	char *user_agent;

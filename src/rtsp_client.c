@@ -47,6 +47,12 @@ static void rtsp_client_pomp_event_cb(
 	void *userdata);
 
 
+static void rtsp_client_mbox_cb(
+	int fd,
+	uint32_t revents,
+	void *userdata);
+
+
 static void rtsp_client_pomp_cb(
 	struct pomp_ctx *ctx,
 	struct pomp_conn *conn,
@@ -62,6 +68,7 @@ struct rtsp_client *rtsp_client_new(
 	int ret;
 	int mutex_created = 0, cond_created = 0;
 	char *p, *temp, *u = NULL;
+	int mbox_fd = -1;
 
 	RTSP_RETURN_VAL_IF_FAILED(url != NULL, -EINVAL, NULL);
 	RTSP_RETURN_VAL_IF_FAILED(strlen(url), -EINVAL, NULL);
@@ -72,6 +79,7 @@ struct rtsp_client *rtsp_client_new(
 	struct rtsp_client *client = calloc(1, sizeof(*client));
 	RTSP_RETURN_VAL_IF_FAILED(client != NULL, -ENOMEM, NULL);
 	client->tcp_state = RTSP_TCP_STATE_IDLE;
+	client->max_msg_size = PIPE_BUF - 1;
 
 	client->user_agent = (user_agent) ?
 		strdup(user_agent) : strdup(RTSP_CLIENT_DEFAULT_USER_AGENT);
@@ -134,6 +142,20 @@ struct rtsp_client *rtsp_client_new(
 		goto error;
 	}
 
+	client->mbox = mbox_new(client->max_msg_size);
+	if (client->mbox == NULL) {
+		RTSP_LOGE("mbox creation failed");
+		goto error;
+	}
+	mbox_fd = mbox_get_read_fd(client->mbox);
+
+	ret = pomp_loop_add(loop, mbox_fd, POMP_FD_EVENT_IN,
+		rtsp_client_mbox_cb, (void *)client);
+	if (ret != 0) {
+		RTSP_LOG_ERRNO("failed to add mbox fd to loop", -ret);
+		goto error;
+	}
+
 	ret = pthread_mutex_init(&client->mutex, NULL);
 	if (ret != 0) {
 		RTSP_LOGE("mutex creation failed, aborting");
@@ -188,6 +210,8 @@ error:
 		pthread_cond_destroy(&client->cond);
 	if (client->pomp)
 		pomp_ctx_destroy(client->pomp);
+	if (client->mbox)
+		mbox_destroy(client->mbox);
 	free(client->user_agent);
 	free(client->server_host);
 	free(client->abs_path);
@@ -207,6 +231,7 @@ int rtsp_client_destroy(
 	pthread_cond_destroy(&client->cond);
 	pomp_ctx_stop(client->pomp);
 	pomp_ctx_destroy(client->pomp);
+	mbox_destroy(client->mbox);
 	free(client->sdp);
 	free(client->session_id);
 	free(client->user_agent);
@@ -229,48 +254,31 @@ int rtsp_client_options(
 	struct rtsp_client *client)
 {
 	int ret = 0, err;
-	char *request;
-	struct pomp_buffer *req_buf = NULL;
-	enum rtsp_tcp_state tcp_state;
+	char *request = NULL;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 
-	/* wait for connection to be ready */
-	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
-		pthread_cond_wait(&client->cond, &client->mutex);
-	tcp_state = client->tcp_state;
-	pthread_mutex_unlock(&client->mutex);
-
-	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
-		RTSP_LOGE("connection failed");
-		ret = -1;
-		goto out;
-	}
-
 	/* create request */
-	err = asprintf(&request,
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_ERR_IF_FAILED(request != NULL, -ENOMEM);
+
+	err = snprintf(request, client->max_msg_size,
 		RTSP_METHOD_OPTIONS " %s " RTSP_VERSION "\n"
 		RTSP_HEADER_CSEQ ": %d\n"
 		RTSP_HEADER_USER_AGENT ": %s\n\n",
 		client->url, ++client->cseq, client->user_agent);
-	if (err == -1) {
-		RTSP_LOGE("failed to allocate request");
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
 		ret = -1;
 		goto out;
 	}
 
-	/* send request */
-	req_buf = pomp_buffer_new_with_data(request, strlen(request));
-	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	/* push into the mailbox */
+	err = mbox_push(client->mbox, request);
 	if (err < 0) {
-		RTSP_LOG_ERRNO("failed to send request", -err);
+		RTSP_LOGE("failed to push into mbox");
 		ret = -1;
 		goto out;
-	}
-	if (req_buf) {
-		pomp_buffer_unref(req_buf);
-		req_buf = NULL;
 	}
 
 	/* wait for response */
@@ -279,8 +287,6 @@ int rtsp_client_options(
 	pthread_mutex_unlock(&client->mutex);
 
 out:
-	if (req_buf)
-		pomp_buffer_unref(req_buf);
 	free(request);
 	return ret;
 }
@@ -291,48 +297,32 @@ int rtsp_client_describe(
 	char **session_description)
 {
 	int ret = 0, err;
-	char *request, *sdp = NULL;
-	struct pomp_buffer *req_buf = NULL;
-	enum rtsp_tcp_state tcp_state;
+	char *request = NULL, *sdp = NULL;
+
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 
-	/* wait for connection to be ready */
-	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
-		pthread_cond_wait(&client->cond, &client->mutex);
-	tcp_state = client->tcp_state;
-	pthread_mutex_unlock(&client->mutex);
-
-	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
-		RTSP_LOGE("connection failed");
-		ret = -1;
-		goto out;
-	}
-
 	/* create request */
-	err = asprintf(&request,
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_ERR_IF_FAILED(request != NULL, -ENOMEM);
+
+	err = snprintf(request, client->max_msg_size,
 		RTSP_METHOD_DESCRIBE " %s " RTSP_VERSION "\n"
 		RTSP_HEADER_CSEQ ": %d\n"
 		RTSP_HEADER_USER_AGENT ": %s\n"
 		RTSP_HEADER_ACCEPT ": " RTSP_CONTENT_TYPE_SDP "\n\n",
 		client->url, ++client->cseq, client->user_agent);
-	if (err == -1) {
-		RTSP_LOGE("failed to allocate request");
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
 		ret = -1;
 		goto out;
 	}
 
-	/* send request */
-	req_buf = pomp_buffer_new_with_data(request, strlen(request));
-	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	/* push into the mailbox */
+	err = mbox_push(client->mbox, request);
 	if (err < 0) {
-		RTSP_LOG_ERRNO("failed to send request", -err);
+		RTSP_LOGE("failed to push into mbox");
 		ret = -1;
 		goto out;
-	}
-	if (req_buf) {
-		pomp_buffer_unref(req_buf);
-		req_buf = NULL;
 	}
 
 	/* wait for response */
@@ -345,8 +335,6 @@ int rtsp_client_describe(
 	pthread_mutex_unlock(&client->mutex);
 
 out:
-	if (req_buf)
-		pomp_buffer_unref(req_buf);
 	free(request);
 	if ((ret == 0) && (session_description))
 		*session_description = sdp;
@@ -364,27 +352,12 @@ int rtsp_client_setup(
 {
 	int ret = 0, err;
 	int s_stream_port, s_control_port;
-	char *request, *media_url = NULL;
-	struct pomp_buffer *req_buf = NULL;
-	enum rtsp_tcp_state tcp_state;
+	char *request = NULL, *media_url = NULL;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(resource_url != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_stream_port != 0, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_control_port != 0, -EINVAL);
-
-	/* wait for connection to be ready */
-	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
-		pthread_cond_wait(&client->cond, &client->mutex);
-	tcp_state = client->tcp_state;
-	pthread_mutex_unlock(&client->mutex);
-
-	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
-		RTSP_LOGE("connection failed");
-		ret = -1;
-		goto out;
-	}
 
 	if (!strncmp(resource_url, RTSP_SCHEME_TCP, strlen(RTSP_SCHEME_TCP))) {
 		media_url = strdup(resource_url);
@@ -403,8 +376,11 @@ int rtsp_client_setup(
 	}
 
 	/* create request */
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_ERR_IF_FAILED(request != NULL, -ENOMEM);
+
 	if (client->session_id)
-		err = asprintf(&request,
+		err = snprintf(request, client->max_msg_size,
 			RTSP_METHOD_SETUP " %s " RTSP_VERSION "\n"
 			RTSP_HEADER_CSEQ ": %d\n"
 			RTSP_HEADER_USER_AGENT ": %s\n"
@@ -416,7 +392,7 @@ int rtsp_client_setup(
 			client_stream_port, client_control_port,
 			client->session_id);
 	else
-		err = asprintf(&request,
+		err = snprintf(request, client->max_msg_size,
 			RTSP_METHOD_SETUP " %s " RTSP_VERSION "\n"
 			RTSP_HEADER_CSEQ ": %d\n"
 			RTSP_HEADER_USER_AGENT ": %s\n"
@@ -425,23 +401,18 @@ int rtsp_client_setup(
 			";" RTSP_TRANSPORT_CLIENT_PORT "=%d-%d\n\n",
 			media_url, ++client->cseq, client->user_agent,
 			client_stream_port, client_control_port);
-	if (err == -1) {
-		RTSP_LOGE("failed to allocate request");
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
 		ret = -1;
 		goto out;
 	}
 
-	/* send request */
-	req_buf = pomp_buffer_new_with_data(request, strlen(request));
-	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	/* push into the mailbox */
+	err = mbox_push(client->mbox, request);
 	if (err < 0) {
-		RTSP_LOG_ERRNO("failed to send request", -err);
+		RTSP_LOGE("failed to push into mbox");
 		ret = -1;
 		goto out;
-	}
-	if (req_buf) {
-		pomp_buffer_unref(req_buf);
-		req_buf = NULL;
 	}
 
 	/* wait for response */
@@ -453,8 +424,6 @@ int rtsp_client_setup(
 	pthread_mutex_unlock(&client->mutex);
 
 out:
-	if (req_buf)
-		pomp_buffer_unref(req_buf);
 	free(request);
 	free(media_url);
 	if (ret == 0) {
@@ -471,28 +440,16 @@ int rtsp_client_play(
 	struct rtsp_client *client)
 {
 	int ret = 0, err;
-	char *request;
-	struct pomp_buffer *req_buf = NULL;
-	enum rtsp_tcp_state tcp_state;
+	char *request = NULL;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
 
-	/* wait for connection to be ready */
-	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
-		pthread_cond_wait(&client->cond, &client->mutex);
-	tcp_state = client->tcp_state;
-	pthread_mutex_unlock(&client->mutex);
-
-	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
-		RTSP_LOGE("connection failed");
-		ret = -1;
-		goto out;
-	}
-
 	/* create request */
-	err = asprintf(&request,
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_ERR_IF_FAILED(request != NULL, -ENOMEM);
+
+	err = snprintf(request, client->max_msg_size,
 		RTSP_METHOD_PLAY " %s " RTSP_VERSION "\n"
 		RTSP_HEADER_CSEQ ": %d\n"
 		RTSP_HEADER_USER_AGENT ": %s\n"
@@ -501,23 +458,18 @@ int rtsp_client_play(
 		(client->content_base) ? client->content_base : client->url,
 		++client->cseq, client->user_agent, client->session_id);
 		/*TODO: range*/
-	if (err == -1) {
-		RTSP_LOGE("failed to allocate request");
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
 		ret = -1;
 		goto out;
 	}
 
-	/* send request */
-	req_buf = pomp_buffer_new_with_data(request, strlen(request));
-	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	/* push into the mailbox */
+	err = mbox_push(client->mbox, request);
 	if (err < 0) {
-		RTSP_LOG_ERRNO("failed to send request", -err);
+		RTSP_LOGE("failed to push into mbox");
 		ret = -1;
 		goto out;
-	}
-	if (req_buf) {
-		pomp_buffer_unref(req_buf);
-		req_buf = NULL;
 	}
 
 	/* wait for response */
@@ -526,8 +478,6 @@ int rtsp_client_play(
 	pthread_mutex_unlock(&client->mutex);
 
 out:
-	if (req_buf)
-		pomp_buffer_unref(req_buf);
 	free(request);
 	return ret;
 }
@@ -537,51 +487,34 @@ int rtsp_client_teardown(
 	struct rtsp_client *client)
 {
 	int ret = 0, err;
-	char *request;
-	struct pomp_buffer *req_buf = NULL;
-	enum rtsp_tcp_state tcp_state;
+	char *request = NULL;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
 
-	/* wait for connection to be ready */
-	pthread_mutex_lock(&client->mutex);
-	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
-		pthread_cond_wait(&client->cond, &client->mutex);
-	tcp_state = client->tcp_state;
-	pthread_mutex_unlock(&client->mutex);
-
-	if (tcp_state != RTSP_TCP_STATE_CONNECTED) {
-		RTSP_LOGE("connection failed");
-		ret = -1;
-		goto out;
-	}
-
 	/* create request */
-	err = asprintf(&request,
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_ERR_IF_FAILED(request != NULL, -ENOMEM);
+
+	err = snprintf(request, client->max_msg_size,
 		RTSP_METHOD_TEARDOWN " %s " RTSP_VERSION "\n"
 		RTSP_HEADER_CSEQ ": %d\n"
 		RTSP_HEADER_USER_AGENT ": %s\n"
 		RTSP_HEADER_SESSION ": %s\n\n",
 		client->content_base, ++client->cseq,
 		client->user_agent, client->session_id);
-	if (err == -1) {
-		RTSP_LOGE("failed to allocate request");
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
 		ret = -1;
 		goto out;
 	}
 
-	/* send request */
-	req_buf = pomp_buffer_new_with_data(request, strlen(request));
-	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	/* push into the mailbox */
+	err = mbox_push(client->mbox, request);
 	if (err < 0) {
-		RTSP_LOG_ERRNO("failed to send request", -err);
+		RTSP_LOGE("failed to push into mbox");
 		ret = -1;
 		goto out;
-	}
-	if (req_buf) {
-		pomp_buffer_unref(req_buf);
-		req_buf = NULL;
 	}
 
 	/* wait for response */
@@ -590,8 +523,6 @@ int rtsp_client_teardown(
 	pthread_mutex_unlock(&client->mutex);
 
 out:
-	if (req_buf)
-		pomp_buffer_unref(req_buf);
 	free(request);
 	return ret;
 }
@@ -605,22 +536,26 @@ static void rtsp_client_pomp_event_cb(
 	void *userdata)
 {
 	struct rtsp_client *client = (struct rtsp_client *)userdata;
+	char *request = NULL;
+	int err;
 
 	switch (event) {
 	case POMP_EVENT_CONNECTED:
 		RTSP_LOGI("client connected");
-		pthread_mutex_lock(&client->mutex);
 		client->tcp_state = RTSP_TCP_STATE_CONNECTED;
-		pthread_mutex_unlock(&client->mutex);
-		pthread_cond_signal(&client->cond);
+		request = calloc(client->max_msg_size, 1);
+		if (request) {
+			err = mbox_push(client->mbox, request);
+			if (err < 0)
+				RTSP_LOGE("failed to push into mbox");
+			free(request);
+		} else
+			RTSP_LOGE("allocation failed");
 		break;
 
 	case POMP_EVENT_DISCONNECTED:
 		RTSP_LOGI("client disconnected");
-		pthread_mutex_lock(&client->mutex);
 		client->tcp_state = RTSP_TCP_STATE_IDLE;
-		pthread_mutex_unlock(&client->mutex);
-		pthread_cond_signal(&client->cond);
 		break;
 
 	default:
@@ -628,6 +563,56 @@ static void rtsp_client_pomp_event_cb(
 		/* never received for raw context */
 		break;
 	}
+}
+
+
+static void rtsp_client_mbox_cb(
+	int fd,
+	uint32_t revents,
+	void *userdata)
+{
+	struct rtsp_client *client = (struct rtsp_client *)userdata;
+	struct pomp_buffer *req_buf = NULL;
+	char *buf;
+	int ret;
+
+	RTSP_RETURN_IF_FAILED(client != NULL, -EINVAL);
+
+	if (client->tcp_state != RTSP_TCP_STATE_CONNECTED)
+		return;
+
+	buf = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_IF_FAILED(buf != NULL, -ENOMEM);
+
+	do {
+		/* read from the mailbox */
+		ret = mbox_peek(client->mbox, buf);
+		if ((ret < 0) && (ret != -EAGAIN)) {
+			RTSP_LOG_ERRNO("failed to read from mbox", -ret);
+			goto out;
+		}
+
+		if (ret != 0)
+			break;
+
+		if (!strlen(buf)) {
+			RTSP_LOGI("NULL msg in mbox");
+			continue;
+		}
+
+		/* send the request */
+		req_buf = pomp_buffer_new_with_data(buf, strlen(buf));
+		ret = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+		if (ret < 0) {
+			RTSP_LOG_ERRNO("failed to send request", -ret);
+			goto out;
+		}
+	} while (ret == 0);
+
+out:
+	if (req_buf)
+		pomp_buffer_unref(req_buf);
+	free(buf);
 }
 
 

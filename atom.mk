@@ -15,7 +15,7 @@ LOCAL_SRC_FILES := \
     src/rtsp_client.c \
     src/rtsp_log.c
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/include
-LOCAL_LIBRARIES := libpomp
+LOCAL_LIBRARIES := libpomp libfutils
 LOCAL_CONDITIONAL_LIBRARIES := OPTIONAL:libulog
 LOCAL_CFLAGS := -Wextra
 
