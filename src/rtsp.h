@@ -250,6 +250,21 @@ enum rtsp_tcp_state {
 };
 
 
+enum rtsp_client_state {
+	RTSP_CLIENT_STATE_IDLE = 0,
+	RTSP_CLIENT_STATE_OPTIONS_WAITING_REPLY,
+	RTSP_CLIENT_STATE_OPTIONS_OK,
+	RTSP_CLIENT_STATE_DESCRIBE_WAITING_REPLY,
+	RTSP_CLIENT_STATE_DESCRIBE_OK,
+	RTSP_CLIENT_STATE_SETUP_WAITING_REPLY,
+	RTSP_CLIENT_STATE_SETUP_OK,
+	RTSP_CLIENT_STATE_PLAY_WAITING_REPLY,
+	RTSP_CLIENT_STATE_PLAY_OK,
+	RTSP_CLIENT_STATE_TEARDOWN_WAITING_REPLY,
+	RTSP_CLIENT_STATE_TEARDOWN_OK,
+};
+
+
 struct rtsp_transport_header {
 	char *transport;
 	int server_stream_port;
@@ -284,8 +299,15 @@ struct rtsp_client {
 	struct pomp_ctx *pomp;
 	struct mbox *mbox;
 	unsigned int max_msg_size;
+
+	/* states */
 	enum rtsp_tcp_state tcp_state;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
+	int playing;
 	unsigned int cseq;
+	char *session_id;
+
 	char *user_agent;
 	char *content_encoding;
 	char *content_language;
@@ -295,14 +317,11 @@ struct rtsp_client {
 	char *server_host;
 	char *abs_path;
 	char *sdp;
-	char *session_id;
 	int server_port;
 	int server_stream_port;
 	int server_control_port;
 	pthread_mutex_t mutex;
 	pthread_cond_t cond;
-	int wait_describe_response;
-	int wait_setup_response;
 	int pending_content_length;
 	int pending_content_offset;
 	char *pending_content;

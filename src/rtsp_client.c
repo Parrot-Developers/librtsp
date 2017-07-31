@@ -79,6 +79,7 @@ struct rtsp_client *rtsp_client_new(
 	struct rtsp_client *client = calloc(1, sizeof(*client));
 	RTSP_RETURN_VAL_IF_FAILED(client != NULL, -ENOMEM, NULL);
 	client->tcp_state = RTSP_TCP_STATE_IDLE;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	client->max_msg_size = PIPE_BUF - 1;
 
 	client->user_agent = (user_agent) ?
@@ -255,8 +256,16 @@ int rtsp_client_options(
 {
 	int ret = 0, err;
 	char *request = NULL;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_ERR_IF_FAILED(waiting_reply == 0, -EBUSY);
 
 	/* create request */
 	request = calloc(client->max_msg_size, 1);
@@ -273,6 +282,12 @@ int rtsp_client_options(
 		goto out;
 	}
 
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_OPTIONS_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
 	/* push into the mailbox */
 	err = mbox_push(client->mbox, request);
 	if (err < 0) {
@@ -284,7 +299,14 @@ int rtsp_client_options(
 	/* wait for response */
 	pthread_mutex_lock(&client->mutex);
 	pthread_cond_wait(&client->cond, &client->mutex);
+	client->waiting_reply = 0;
+	client_state = client->client_state;
 	pthread_mutex_unlock(&client->mutex);
+	if (client_state != RTSP_CLIENT_STATE_OPTIONS_OK) {
+		RTSP_LOGE("failed to get reply");
+		ret = -1;
+		goto out;
+	}
 
 out:
 	free(request);
@@ -298,8 +320,16 @@ int rtsp_client_describe(
 {
 	int ret = 0, err;
 	char *request = NULL, *sdp = NULL;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_ERR_IF_FAILED(waiting_reply == 0, -EBUSY);
 
 	/* create request */
 	request = calloc(client->max_msg_size, 1);
@@ -317,6 +347,12 @@ int rtsp_client_describe(
 		goto out;
 	}
 
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_DESCRIBE_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
 	/* push into the mailbox */
 	err = mbox_push(client->mbox, request);
 	if (err < 0) {
@@ -329,10 +365,16 @@ int rtsp_client_describe(
 	pthread_mutex_lock(&client->mutex);
 	free(client->sdp);
 	client->sdp = NULL;
-	client->wait_describe_response = 1;
 	pthread_cond_wait(&client->cond, &client->mutex);
 	sdp = client->sdp;
+	client->waiting_reply = 0;
+	client_state = client->client_state;
 	pthread_mutex_unlock(&client->mutex);
+	if (client_state != RTSP_CLIENT_STATE_DESCRIBE_OK) {
+		RTSP_LOGE("failed to get reply");
+		ret = -1;
+		goto out;
+	}
 
 out:
 	free(request);
@@ -353,12 +395,21 @@ int rtsp_client_setup(
 	int ret = 0, err;
 	int s_stream_port, s_control_port;
 	char *request = NULL, *media_url = NULL;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(resource_url != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_stream_port != 0, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(client_control_port != 0, -EINVAL);
 
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_ERR_IF_FAILED(waiting_reply == 0, -EBUSY);
+
+	/* create the media URL */
 	if (!strncmp(resource_url, RTSP_SCHEME_TCP, strlen(RTSP_SCHEME_TCP))) {
 		media_url = strdup(resource_url);
 	} else {
@@ -407,6 +458,12 @@ int rtsp_client_setup(
 		goto out;
 	}
 
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_SETUP_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
 	/* push into the mailbox */
 	err = mbox_push(client->mbox, request);
 	if (err < 0) {
@@ -417,11 +474,17 @@ int rtsp_client_setup(
 
 	/* wait for response */
 	pthread_mutex_lock(&client->mutex);
-	client->wait_setup_response = 1;
 	pthread_cond_wait(&client->cond, &client->mutex);
 	s_stream_port = client->server_stream_port;
 	s_control_port = client->server_control_port;
+	client->waiting_reply = 0;
+	client_state = client->client_state;
 	pthread_mutex_unlock(&client->mutex);
+	if (client_state != RTSP_CLIENT_STATE_SETUP_OK) {
+		RTSP_LOGE("failed to get reply");
+		ret = -1;
+		goto out;
+	}
 
 out:
 	free(request);
@@ -441,8 +504,16 @@ int rtsp_client_play(
 {
 	int ret = 0, err;
 	char *request = NULL;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_ERR_IF_FAILED(waiting_reply == 0, -EBUSY);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
 
 	/* create request */
@@ -464,6 +535,12 @@ int rtsp_client_play(
 		goto out;
 	}
 
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_PLAY_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
 	/* push into the mailbox */
 	err = mbox_push(client->mbox, request);
 	if (err < 0) {
@@ -475,7 +552,16 @@ int rtsp_client_play(
 	/* wait for response */
 	pthread_mutex_lock(&client->mutex);
 	pthread_cond_wait(&client->cond, &client->mutex);
+	client->waiting_reply = 0;
+	client_state = client->client_state;
+	if (client_state == RTSP_CLIENT_STATE_PLAY_OK)
+		client->playing = 1;
 	pthread_mutex_unlock(&client->mutex);
+	if (client_state != RTSP_CLIENT_STATE_PLAY_OK) {
+		RTSP_LOGE("failed to get reply");
+		ret = -1;
+		goto out;
+	}
 
 out:
 	free(request);
@@ -488,8 +574,16 @@ int rtsp_client_teardown(
 {
 	int ret = 0, err;
 	char *request = NULL;
+	enum rtsp_client_state client_state;
+	int waiting_reply;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_ERR_IF_FAILED(waiting_reply == 0, -EBUSY);
 	RTSP_RETURN_ERR_IF_FAILED(client->session_id != NULL, -EPERM);
 
 	/* create request */
@@ -509,6 +603,12 @@ int rtsp_client_teardown(
 		goto out;
 	}
 
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_TEARDOWN_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
 	/* push into the mailbox */
 	err = mbox_push(client->mbox, request);
 	if (err < 0) {
@@ -520,7 +620,18 @@ int rtsp_client_teardown(
 	/* wait for response */
 	pthread_mutex_lock(&client->mutex);
 	pthread_cond_wait(&client->cond, &client->mutex);
+	client->waiting_reply = 0;
+	client_state = client->client_state;
+	if (client_state == RTSP_CLIENT_STATE_TEARDOWN_OK) {
+		client->playing = 0;
+		xfree((void **)&client->session_id);
+	}
 	pthread_mutex_unlock(&client->mutex);
+	if (client_state != RTSP_CLIENT_STATE_TEARDOWN_OK) {
+		RTSP_LOGE("failed to get reply");
+		ret = -1;
+		goto out;
+	}
 
 out:
 	free(request);
@@ -730,7 +841,12 @@ static void rtsp_client_pomp_cb(
 			}
 		}
 
-		if (client->wait_describe_response) {
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_OPTIONS_WAITING_REPLY)
+			client->client_state = RTSP_CLIENT_STATE_OPTIONS_OK;
+
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_DESCRIBE_WAITING_REPLY) {
 			xfree((void **)&client->sdp);
 			if ((client->pending_content) &&
 				(header->content_type) &&
@@ -738,16 +854,25 @@ static void rtsp_client_pomp_cb(
 				RTSP_CONTENT_TYPE_SDP,
 				strlen(RTSP_CONTENT_TYPE_SDP))))
 				client->sdp = strdup(client->pending_content);
-			client->wait_describe_response = 0;
+			client->client_state = RTSP_CLIENT_STATE_DESCRIBE_OK;
 		}
 
-		if (client->wait_setup_response) {
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_SETUP_WAITING_REPLY) {
 			client->server_stream_port =
 				header->transport.server_stream_port;
 			client->server_control_port =
 				header->transport.server_control_port;
-			client->wait_setup_response = 0;
+			client->client_state = RTSP_CLIENT_STATE_SETUP_OK;
 		}
+
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_PLAY_WAITING_REPLY)
+			client->client_state = RTSP_CLIENT_STATE_PLAY_OK;
+
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_TEARDOWN_WAITING_REPLY)
+			client->client_state = RTSP_CLIENT_STATE_TEARDOWN_OK;
 
 		pthread_mutex_unlock(&client->mutex);
 
