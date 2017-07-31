@@ -296,7 +296,9 @@ struct rtsp_server {
 
 struct rtsp_client {
 	struct sockaddr_in remote_addr_in;
+	struct pomp_loop *loop;
 	struct pomp_ctx *pomp;
+	int connect_pipe[2];
 	struct mbox *mbox;
 	unsigned int max_msg_size;
 

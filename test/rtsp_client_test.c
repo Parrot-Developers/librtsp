@@ -107,12 +107,13 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-	client = rtsp_client_new(url, NULL, loop);
+	client = rtsp_client_new(NULL, loop);
 	if (!client) {
 		ULOGE("rtsp_client_new() failed");
 		ret = EXIT_FAILURE;
 		goto cleanup;
 	}
+	printf("Client is created\n");
 
 	err = pthread_create(&loop_thread, NULL, loop_thread_func, NULL);
 	if (err != 0) {
@@ -124,6 +125,15 @@ int main(int argc, char **argv)
 
 	signal(SIGINT, sighandler);
 	printf("Client is running\n");
+
+	if (!stopping) {
+		err = rtsp_client_connect(client, url);
+		if (err) {
+			ULOGE("rtsp_client_options() failed");
+			ret = EXIT_FAILURE;
+			stopping = 1;
+		}
+	}
 
 	if (!stopping) {
 		err = rtsp_client_options(client, 2000);
@@ -189,7 +199,7 @@ int main(int argc, char **argv)
 	}
 	printf("Client is playing\n");
 
-	for (i = 0; (i < 10) && (!stopping); i++)
+	for (i = 0; (i < 5) && (!stopping); i++)
 		sleep(1);
 
 	if (!stopping) {
@@ -205,11 +215,13 @@ int main(int argc, char **argv)
 
 cleanup:
 	if (client) {
-		err = rtsp_client_destroy(client);
+		err = rtsp_client_disconnect(client);
 		if (err) {
-			ULOGE("rtsp_client_destroy() failed");
+			ULOGE("rtsp_client_options() failed");
 			ret = EXIT_FAILURE;
+			stopping = 1;
 		}
+		printf("Client is disconnected\n");
 	}
 
 	stopping = 1;
@@ -220,6 +232,18 @@ cleanup:
 		err = pthread_join(loop_thread, NULL);
 		if (err != 0)
 			ULOGE("pthread_join() failed (%d)", err);
+	}
+
+	if (client) {
+		do {
+			err = rtsp_client_destroy(client);
+			if ((err != 0) && (err != -EBUSY)) {
+				ULOGE("rtsp_client_destroy() failed");
+				ret = EXIT_FAILURE;
+			}
+			usleep(1000);
+		} while (err == -EBUSY);
+		printf("Client is destroyed\n");
 	}
 
 	if (loop) {

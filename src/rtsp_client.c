@@ -39,6 +39,12 @@
 #include "rtsp.h"
 
 
+static void rtsp_client_pipe_cb(
+	int fd,
+	uint32_t revents,
+	void *userdata);
+
+
 static void rtsp_client_pomp_event_cb(
 	struct pomp_ctx *ctx,
 	enum pomp_event event,
@@ -61,19 +67,13 @@ static void rtsp_client_pomp_cb(
 
 
 struct rtsp_client *rtsp_client_new(
-	const char *url,
 	const char *user_agent,
 	struct pomp_loop *loop)
 {
 	int ret;
 	int mutex_created = 0, cond_created = 0;
-	char *p, *temp, *u = NULL;
 	int mbox_fd = -1;
 
-	RTSP_RETURN_VAL_IF_FAILED(url != NULL, -EINVAL, NULL);
-	RTSP_RETURN_VAL_IF_FAILED(strlen(url), -EINVAL, NULL);
-	RTSP_RETURN_VAL_IF_FAILED(strncmp(url, RTSP_SCHEME_TCP,
-		strlen(RTSP_SCHEME_TCP)) == 0, -EINVAL, NULL);
 	RTSP_RETURN_VAL_IF_FAILED(loop != NULL, -EINVAL, NULL);
 
 	struct rtsp_client *client = calloc(1, sizeof(*client));
@@ -81,6 +81,9 @@ struct rtsp_client *rtsp_client_new(
 	client->tcp_state = RTSP_TCP_STATE_IDLE;
 	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	client->max_msg_size = PIPE_BUF - 1;
+	client->loop = loop;
+	client->connect_pipe[0] = -1;
+	client->connect_pipe[1] = -1;
 
 	client->user_agent = (user_agent) ?
 		strdup(user_agent) : strdup(RTSP_CLIENT_DEFAULT_USER_AGENT);
@@ -89,57 +92,16 @@ struct rtsp_client *rtsp_client_new(
 		goto error;
 	}
 
-	client->url = strdup(url);
-	if (!client->url) {
-		RTSP_LOGE("string allocation failed, aborting");
+	ret = pipe(client->connect_pipe);
+	if (ret != 0) {
+		RTSP_LOG_ERRNO("pipe creation failed", -ret);
 		goto error;
 	}
 
-	/* parse the URL */
-	client->server_port = RTSP_DEFAULT_PORT;
-	u = strdup(client->url + 7);
-	if (!u) {
-		RTSP_LOGE("string allocation failed, aborting");
-		goto error;
-	}
-	p = strtok_r(u, "/", &temp);
-	if (p) {
-		/* host */
-		char *p2 = strchr(p, ':');
-		if (p2) {
-			/* port */
-			client->server_port = atoi(p2 + 1);
-			*p2 = '\0';
-		}
-		client->server_host = strdup(p);
-		if (!client->server_host) {
-			RTSP_LOGE("string allocation failed, aborting");
-			goto error;
-		}
-
-		/* absolute path */
-		p = strtok_r(NULL, "/", &temp);
-		if (p) {
-			client->abs_path = strdup(p);
-			if (!client->abs_path) {
-				RTSP_LOGE("string allocation failed, aborting");
-				goto error;
-			}
-		}
-	}
-	free(u);
-
-	/* check the URL validity */
-	if ((!client->server_host) || (!strlen(client->server_host))) {
-		RTSP_LOGE("invalid server host, aborting");
-		goto error;
-	}
-	if (client->server_port == 0) {
-		RTSP_LOGE("invalid server port, aborting");
-		goto error;
-	}
-	if ((!client->abs_path) || (!strlen(client->abs_path))) {
-		RTSP_LOGE("invalid resource path, aborting");
+	ret = pomp_loop_add(client->loop, client->connect_pipe[0],
+		POMP_FD_EVENT_IN, rtsp_client_pipe_cb, (void *)client);
+	if (ret != 0) {
+		RTSP_LOG_ERRNO("failed to add pipe fd to loop", -ret);
 		goto error;
 	}
 
@@ -148,12 +110,28 @@ struct rtsp_client *rtsp_client_new(
 		RTSP_LOGE("mbox creation failed");
 		goto error;
 	}
-	mbox_fd = mbox_get_read_fd(client->mbox);
 
-	ret = pomp_loop_add(loop, mbox_fd, POMP_FD_EVENT_IN,
+	mbox_fd = mbox_get_read_fd(client->mbox);
+	ret = pomp_loop_add(client->loop, mbox_fd, POMP_FD_EVENT_IN,
 		rtsp_client_mbox_cb, (void *)client);
 	if (ret != 0) {
 		RTSP_LOG_ERRNO("failed to add mbox fd to loop", -ret);
+		goto error;
+	}
+
+	client->pomp = pomp_ctx_new_with_loop(
+		rtsp_client_pomp_event_cb,
+		(void *)client, client->loop);
+	if (!client->pomp) {
+		RTSP_LOGE("pomp creation failed, aborting");
+		ret = -1;
+		goto error;
+	}
+
+	ret = pomp_ctx_set_raw(client->pomp, rtsp_client_pomp_cb);
+	if (ret < 0) {
+		RTSP_LOG_ERRNO(
+			"cannot switch pomp context to raw mode", -ret);
 		goto error;
 	}
 
@@ -163,6 +141,7 @@ struct rtsp_client *rtsp_client_new(
 		goto error;
 	}
 	mutex_created = 1;
+
 	ret = pthread_cond_init(&client->cond, NULL);
 	if (ret != 0) {
 		RTSP_LOGE("cond creation failed, aborting");
@@ -170,54 +149,30 @@ struct rtsp_client *rtsp_client_new(
 	}
 	cond_created = 1;
 
-	client->pomp = pomp_ctx_new_with_loop(
-		rtsp_client_pomp_event_cb, (void *)client, loop);
-	if (!client->pomp) {
-		RTSP_LOGE("pomp creation failed, aborting");
-		goto error;
-	}
-
-	ret = pomp_ctx_set_raw(client->pomp, rtsp_client_pomp_cb);
-	if (ret < 0) {
-		RTSP_LOG_ERRNO("cannot switch pomp context to raw mode", -ret);
-		goto error;
-	}
-
-	/* TODO: name resolution */
-	ret = inet_pton(AF_INET, client->server_host,
-		&client->remote_addr_in.sin_addr);
-	if (ret <= 0) {
-		RTSP_LOGE("failed to convert address %s, aborting",
-			client->server_host);
-		goto error;
-	}
-	client->remote_addr_in.sin_family = AF_INET;
-	client->remote_addr_in.sin_port = htons(client->server_port);
-
-	ret = pomp_ctx_connect(client->pomp,
-		(const struct sockaddr *)&client->remote_addr_in,
-		sizeof(client->remote_addr_in));
-	if (ret < 0) {
-		RTSP_LOG_ERRNO("failed to connect, aborting", -ret);
-		goto error;
-	}
-
 	return client;
 
 error:
+	if (client->pomp)
+		pomp_ctx_destroy(client->pomp);
 	if (mutex_created)
 		pthread_mutex_destroy(&client->mutex);
 	if (cond_created)
 		pthread_cond_destroy(&client->cond);
-	if (client->pomp)
-		pomp_ctx_destroy(client->pomp);
 	if (client->mbox)
 		mbox_destroy(client->mbox);
+	if (client->connect_pipe[0] != -1) {
+		do
+			ret = close(client->connect_pipe[0]);
+		while ((ret == -1) && (errno == EINTR));
+		client->connect_pipe[0] = -1;
+	}
+	if (client->connect_pipe[1] != -1) {
+		do
+			ret = close(client->connect_pipe[1]);
+		while ((ret == -1) && (errno == EINTR));
+		client->connect_pipe[1] = -1;
+	}
 	free(client->user_agent);
-	free(client->server_host);
-	free(client->abs_path);
-	free(client->url);
-	free(u);
 	free(client);
 	return NULL;
 }
@@ -226,13 +181,42 @@ error:
 int rtsp_client_destroy(
 	struct rtsp_client *client)
 {
+	int ret, mbox_fd;
+
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	ret = pomp_ctx_destroy(client->pomp);
+	if (ret != 0) {
+		if (ret != -EBUSY)
+			RTSP_LOG_ERRNO("failed to destroy pomp context", -ret);
+		return ret;
+	}
+
+	mbox_fd = mbox_get_read_fd(client->mbox);
+	ret = pomp_loop_remove(client->loop, mbox_fd);
+	if (ret != 0)
+		RTSP_LOG_ERRNO("failed to remove mbox fd from loop", -ret);
+	mbox_destroy(client->mbox);
+
+	ret = pomp_loop_remove(client->loop, client->connect_pipe[0]);
+	if (ret != 0)
+		RTSP_LOG_ERRNO("failed to remove pipe fd from loop", -ret);
+	if (client->connect_pipe[0] != -1) {
+		do
+			ret = close(client->connect_pipe[0]);
+		while ((ret == -1) && (errno == EINTR));
+		client->connect_pipe[0] = -1;
+	}
+	if (client->connect_pipe[1] != -1) {
+		do
+			ret = close(client->connect_pipe[1]);
+		while ((ret == -1) && (errno == EINTR));
+		client->connect_pipe[1] = -1;
+	}
 
 	pthread_mutex_destroy(&client->mutex);
 	pthread_cond_destroy(&client->cond);
-	pomp_ctx_stop(client->pomp);
-	pomp_ctx_destroy(client->pomp);
-	mbox_destroy(client->mbox);
+
 	free(client->sdp);
 	free(client->session_id);
 	free(client->user_agent);
@@ -248,6 +232,141 @@ int rtsp_client_destroy(
 	free(client);
 
 	return 0;
+}
+
+
+int rtsp_client_connect(
+	struct rtsp_client *client,
+	const char *url)
+{
+	int ret = 0, _ret;
+	char *p, *temp, *u = NULL;
+	char *buf = "x";
+	ssize_t err;
+
+	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(url != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(strlen(url), -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(strncmp(url, RTSP_SCHEME_TCP,
+		strlen(RTSP_SCHEME_TCP)) == 0, -EINVAL);
+
+	if (client->url != NULL) {
+		RTSP_LOGE("client already connected");
+		ret = -EISCONN;
+		goto out;
+	}
+
+	client->url = strdup(url);
+	if (!client->url) {
+		RTSP_LOGE("string allocation failed, aborting");
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	/* parse the URL */
+	client->server_port = RTSP_DEFAULT_PORT;
+	u = strdup(client->url + 7);
+	if (!u) {
+		RTSP_LOGE("string allocation failed, aborting");
+		ret = -ENOMEM;
+		goto out;
+	}
+	p = strtok_r(u, "/", &temp);
+	if (p) {
+		/* host */
+		char *p2 = strchr(p, ':');
+		if (p2) {
+			/* port */
+			client->server_port = atoi(p2 + 1);
+			*p2 = '\0';
+		}
+		client->server_host = strdup(p);
+		if (!client->server_host) {
+			RTSP_LOGE("string allocation failed, aborting");
+			ret = -ENOMEM;
+			goto out;
+		}
+
+		/* absolute path */
+		p = strtok_r(NULL, "/", &temp);
+		if (p) {
+			client->abs_path = strdup(p);
+			if (!client->abs_path) {
+				RTSP_LOGE("string allocation failed, aborting");
+				ret = -ENOMEM;
+				goto out;
+			}
+		}
+	}
+	xfree((void **)&u);
+
+	/* check the URL validity */
+	if ((!client->server_host) || (!strlen(client->server_host))) {
+		RTSP_LOGE("invalid server host, aborting");
+		ret = -EINVAL;
+		goto out;
+	}
+	if (client->server_port == 0) {
+		RTSP_LOGE("invalid server port, aborting");
+		ret = -EINVAL;
+		goto out;
+	}
+	if ((!client->abs_path) || (!strlen(client->abs_path))) {
+		RTSP_LOGE("invalid resource path, aborting");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* TODO: name resolution */
+	_ret = inet_pton(AF_INET, client->server_host,
+		&client->remote_addr_in.sin_addr);
+	if (_ret <= 0) {
+		RTSP_LOGE("failed to convert address %s, aborting",
+			client->server_host);
+		ret = -1;
+		goto out;
+	}
+	client->remote_addr_in.sin_family = AF_INET;
+	client->remote_addr_in.sin_port = htons(client->server_port);
+
+	/* signal the loop to create the connection */
+	do
+		err = write(client->connect_pipe[1], buf, 1);
+	while ((err == -1) && (errno == EINTR));
+
+out:
+	if (ret != 0) {
+		xfree((void **)&client->server_host);
+		xfree((void **)&client->abs_path);
+		xfree((void **)&client->url);
+	}
+	free(u);
+	return ret;
+}
+
+
+int rtsp_client_disconnect(
+	struct rtsp_client *client)
+{
+	int ret = 0;
+	char *buf = "x";
+	ssize_t err;
+
+	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	if (client->url == NULL) {
+		RTSP_LOGE("client is not connected");
+		return -EISCONN;
+	}
+
+	xfree((void **)&client->url);
+
+	/* signal the loop to stop the connection */
+	do
+		err = write(client->connect_pipe[1], buf, 1);
+	while ((err == -1) && (errno == EINTR));
+
+	return ret;
 }
 
 
@@ -308,6 +427,7 @@ int rtsp_client_options(
 		err = pthread_cond_wait(&client->cond, &client->mutex);
 	client->waiting_reply = 0;
 	client_state = client->client_state;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	pthread_mutex_unlock(&client->mutex);
 	if (err == ETIMEDOUT) {
 		RTSP_LOGE("timeout on reply");
@@ -386,6 +506,7 @@ int rtsp_client_describe(
 	sdp = client->sdp;
 	client->waiting_reply = 0;
 	client_state = client->client_state;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	pthread_mutex_unlock(&client->mutex);
 	if (err == ETIMEDOUT) {
 		RTSP_LOGE("timeout on reply");
@@ -509,6 +630,7 @@ int rtsp_client_setup(
 	s_control_port = client->server_control_port;
 	client->waiting_reply = 0;
 	client_state = client->client_state;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	pthread_mutex_unlock(&client->mutex);
 	if (err == ETIMEDOUT) {
 		RTSP_LOGE("timeout on reply");
@@ -592,6 +714,7 @@ int rtsp_client_play(
 		err = pthread_cond_wait(&client->cond, &client->mutex);
 	client->waiting_reply = 0;
 	client_state = client->client_state;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	if (client_state == RTSP_CLIENT_STATE_PLAY_OK)
 		client->playing = 1;
 	pthread_mutex_unlock(&client->mutex);
@@ -671,6 +794,7 @@ int rtsp_client_teardown(
 		err = pthread_cond_wait(&client->cond, &client->mutex);
 	client->waiting_reply = 0;
 	client_state = client->client_state;
+	client->client_state = RTSP_CLIENT_STATE_IDLE;
 	if (client_state == RTSP_CLIENT_STATE_TEARDOWN_OK) {
 		client->playing = 0;
 		xfree((void **)&client->session_id);
@@ -689,6 +813,54 @@ int rtsp_client_teardown(
 out:
 	free(request);
 	return ret;
+}
+
+
+static void rtsp_client_pipe_cb(
+	int fd,
+	uint32_t revents,
+	void *userdata)
+{
+	struct rtsp_client *client = (struct rtsp_client *)userdata;
+	char buf[10];
+	int ret = 0;
+
+	RTSP_RETURN_IF_FAILED(client != NULL, -EINVAL);
+
+	do {
+		/* read from the pipe */
+		ret = read(client->connect_pipe[0], &buf, 10);
+		if ((ret < 0) && (ret != -EAGAIN)) {
+			RTSP_LOG_ERRNO("failed to read from pipe", -ret);
+			break;
+		}
+	} while (ret == 0);
+
+	ret = 0;
+	if (client->url) {
+		RTSP_LOGI("connecting to URL '%s'", client->url);
+		ret = pomp_ctx_connect(client->pomp,
+			(const struct sockaddr *)&client->remote_addr_in,
+			sizeof(client->remote_addr_in));
+		if (ret < 0) {
+			RTSP_LOG_ERRNO("failed to connect", -ret);
+			goto cleanup;
+		}
+	} else {
+		ret = pomp_ctx_stop(client->pomp);
+		goto cleanup;
+		if (ret < 0) {
+			RTSP_LOG_ERRNO("failed to disconnect", -ret);
+			goto cleanup;
+		}
+	}
+
+	return;
+
+cleanup:
+	xfree((void **)&client->server_host);
+	xfree((void **)&client->abs_path);
+	xfree((void **)&client->url);
 }
 
 
@@ -759,10 +931,8 @@ static void rtsp_client_mbox_cb(
 		if (ret != 0)
 			break;
 
-		if (!strlen(buf)) {
-			RTSP_LOGI("NULL msg in mbox");
+		if (!strlen(buf))
 			continue;
-		}
 
 		/* send the request */
 		req_buf = pomp_buffer_new_with_data(buf, strlen(buf));

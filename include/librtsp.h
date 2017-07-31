@@ -61,12 +61,20 @@ int rtsp_server_destroy(
 
 
 struct rtsp_client *rtsp_client_new(
-	const char *url,
 	const char *user_agent,
 	struct pomp_loop *loop);
 
 
 int rtsp_client_destroy(
+	struct rtsp_client *client);
+
+
+int rtsp_client_connect(
+	struct rtsp_client *client,
+	const char *url);
+
+
+int rtsp_client_disconnect(
 	struct rtsp_client *client);
 
 
