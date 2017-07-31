@@ -54,8 +54,8 @@ ULOG_DECLARE_TAG(rtsp_client_test);
 #include <libpomp.h>
 
 
-static int stopping = 0;
-struct pomp_loop *loop = NULL;
+static int stopping;
+struct pomp_loop *loop;
 
 
 static void sighandler(int signum)
@@ -79,7 +79,7 @@ static void *loop_thread_func(void *user)
 
 int main(int argc, char **argv)
 {
-	int ret = EXIT_SUCCESS, err;
+	int ret = EXIT_SUCCESS, err, i;
 	char *url = NULL, *media_url = NULL;
 	struct rtsp_client *client = NULL;
 	pthread_t loop_thread;
@@ -87,6 +87,9 @@ int main(int argc, char **argv)
 	int server_stream_port = 0, server_control_port = 0;
 	char *sdp_str = NULL;
 	struct sdp_session *sdp = NULL;
+
+	stopping = 0;
+	loop = NULL;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s <url>\n", argv[0]);
@@ -123,8 +126,7 @@ int main(int argc, char **argv)
 	printf("Client is running\n");
 
 	if (!stopping) {
-		sleep(1);
-		err = rtsp_client_options(client);
+		err = rtsp_client_options(client, 2000);
 		if (err) {
 			ULOGE("rtsp_client_options() failed");
 			ret = EXIT_FAILURE;
@@ -133,8 +135,7 @@ int main(int argc, char **argv)
 	}
 
 	if (!stopping) {
-		sleep(1);
-		err = rtsp_client_describe(client, &sdp_str);
+		err = rtsp_client_describe(client, &sdp_str, 2000);
 		if (err) {
 			ULOGE("rtsp_client_describe() failed");
 			ret = EXIT_FAILURE;
@@ -153,11 +154,11 @@ int main(int argc, char **argv)
 			ret = EXIT_FAILURE;
 			stopping = 1;
 		} else {
-			struct sdp_media *media;
-			for (media = sdp->media; media; media = media->next) {
+			struct sdp_media *media = NULL;
+			list_walk_entry_forward(&sdp->medias, media, node) {
 				if ((media->type == SDP_MEDIA_TYPE_VIDEO) &&
-					(media->controlUrl)) {
-					media_url = media->controlUrl;
+					(media->control_url)) {
+					media_url = media->control_url;
 					ULOGI("media url: %s", media_url);
 					break;
 				}
@@ -166,9 +167,8 @@ int main(int argc, char **argv)
 	}
 
 	if (!stopping) {
-		sleep(1);
 		err = rtsp_client_setup(client, media_url, 55004, 55005,
-			&server_stream_port, &server_control_port);
+			&server_stream_port, &server_control_port, 2000);
 		if (err) {
 			ULOGE("rtsp_client_setup() failed");
 			ret = EXIT_FAILURE;
@@ -180,8 +180,7 @@ int main(int argc, char **argv)
 	printf("Client is set up\n");
 
 	if (!stopping) {
-		sleep(1);
-		err = rtsp_client_play(client);
+		err = rtsp_client_play(client, 2000);
 		if (err) {
 			ULOGE("rtsp_client_play() failed");
 			ret = EXIT_FAILURE;
@@ -190,9 +189,11 @@ int main(int argc, char **argv)
 	}
 	printf("Client is playing\n");
 
+	for (i = 0; (i < 10) && (!stopping); i++)
+		sleep(1);
+
 	if (!stopping) {
-		sleep(10);
-		err = rtsp_client_teardown(client);
+		err = rtsp_client_teardown(client, 2000);
 		if (err) {
 			ULOGE("rtsp_client_teardown() failed");
 			ret = EXIT_FAILURE;
