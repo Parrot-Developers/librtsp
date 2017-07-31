@@ -71,12 +71,14 @@ int rtsp_client_destroy(
 
 
 int rtsp_client_options(
-	struct rtsp_client *client);
+	struct rtsp_client *client,
+	unsigned int timeout_ms);
 
 
 int rtsp_client_describe(
 	struct rtsp_client *client,
-	char **session_description);
+	char **session_description,
+	unsigned int timeout_ms);
 
 
 int rtsp_client_setup(
@@ -85,15 +87,18 @@ int rtsp_client_setup(
 	int client_stream_port,
 	int client_control_port,
 	int *server_stream_port,
-	int *server_control_port);
+	int *server_control_port,
+	unsigned int timeout_ms);
 
 
 int rtsp_client_play(
-	struct rtsp_client *client);
+	struct rtsp_client *client,
+	unsigned int timeout_ms);
 
 
 int rtsp_client_teardown(
-	struct rtsp_client *client);
+	struct rtsp_client *client,
+	unsigned int timeout_ms);
 
 
 #ifdef __cplusplus

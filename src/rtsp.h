@@ -354,4 +354,18 @@ static inline char *xstrdup(const char *s)
 	return s == NULL ? NULL : strdup(s);
 }
 
+
+static inline void get_time_with_ms_delay(
+	struct timespec *ts, unsigned int delay)
+{
+	struct timeval tp;
+	gettimeofday(&tp, NULL);
+
+	ts->tv_sec = tp.tv_sec;
+	ts->tv_nsec = tp.tv_usec * 1000 + delay * 1000000;
+	ts->tv_sec += ts->tv_nsec / 1000000000L;
+	ts->tv_nsec = ts->tv_nsec % 1000000000L;
+}
+
+
 #endif /* !_RTSP_H_ */
