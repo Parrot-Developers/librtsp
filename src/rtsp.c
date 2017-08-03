@@ -194,8 +194,18 @@ int rtsp_response_header_parse(char *response,
 				RTSP_HEADER_SESSION,
 				strlen(RTSP_HEADER_SESSION))) {
 				char *p3 = strchr(value, ';');
-				if (p3)
+				char *timeout_str = NULL;
+				if (p3) {
+					timeout_str = p3 + 1;
 					*p3 = '\0';
+				}
+				if ((timeout_str) && (!strncmp(timeout_str,
+					RTSP_HEADER_SESSION_TIMEOUT,
+					strlen(RTSP_HEADER_SESSION_TIMEOUT)))) {
+					char *p4 = strchr(timeout_str, '=');
+					if (p4)
+						header->timeout = atoi(p4 + 1);
+				}
 				header->session_id = value;
 				/*TODO: timeout*/
 			} else if (!strncasecmp(field,

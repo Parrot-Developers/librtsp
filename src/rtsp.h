@@ -82,6 +82,7 @@
 #define RTSP_HEADER_CSEQ                "Cseq"
 #define RTSP_HEADER_CONNECTION          "Connection"
 #define RTSP_HEADER_SESSION             "Session"
+#define RTSP_HEADER_SESSION_TIMEOUT     "timeout"
 #define RTSP_HEADER_TRANSPORT           "Transport"
 #define RTSP_HEADER_CONTENT_LANGUAGE    "Content-Language"
 #define RTSP_HEADER_CONTENT_ENCODING    "Content-Encoding"
@@ -283,6 +284,7 @@ struct rtsp_response_header {
 	char *content_location;
 	int cseq;
 	char *session_id;
+	int timeout;
 	struct rtsp_transport_header transport;
 	char *body;
 };
