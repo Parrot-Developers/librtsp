@@ -102,6 +102,7 @@ int rtsp_response_header_copy(struct rtsp_response_header *src,
 	dst->content_location = xstrdup(src->content_location);
 	dst->cseq = src->cseq;
 	dst->session_id = xstrdup(src->session_id);
+	dst->timeout = src->timeout;
 	dst->transport.transport = xstrdup(src->transport.transport);
 	dst->transport.server_stream_port = src->transport.server_stream_port;
 	dst->transport.server_control_port = src->transport.server_control_port;
@@ -207,7 +208,6 @@ int rtsp_response_header_parse(char *response,
 						header->timeout = atoi(p4 + 1);
 				}
 				header->session_id = value;
-				/*TODO: timeout*/
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_CONTENT_LENGTH,
 				strlen(RTSP_HEADER_CONTENT_LENGTH))) {

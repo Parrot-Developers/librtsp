@@ -59,6 +59,11 @@ static void rtsp_client_mbox_cb(
 	void *userdata);
 
 
+static void rtsp_client_timer_cb(
+	struct pomp_timer *timer,
+	void *userdata);
+
+
 static void rtsp_client_pomp_cb(
 	struct pomp_ctx *ctx,
 	struct pomp_conn *conn,
@@ -135,6 +140,14 @@ struct rtsp_client *rtsp_client_new(
 		goto error;
 	}
 
+	client->timer = pomp_timer_new(client->loop,
+		rtsp_client_timer_cb, (void *)client);
+	if (!client->timer) {
+		RTSP_LOGE("pomp timer creation failed, aborting");
+		ret = -1;
+		goto error;
+	}
+
 	ret = pthread_mutex_init(&client->mutex, NULL);
 	if (ret != 0) {
 		RTSP_LOGE("mutex creation failed, aborting");
@@ -152,6 +165,8 @@ struct rtsp_client *rtsp_client_new(
 	return client;
 
 error:
+	if (client->timer)
+		pomp_timer_destroy(client->timer);
 	if (client->pomp)
 		pomp_ctx_destroy(client->pomp);
 	if (mutex_created)
@@ -184,6 +199,13 @@ int rtsp_client_destroy(
 	int ret, mbox_fd;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+
+	ret = pomp_timer_destroy(client->timer);
+	if (ret != 0) {
+		if (ret != -EBUSY)
+			RTSP_LOG_ERRNO("failed to destroy timer context", -ret);
+		return ret;
+	}
 
 	ret = pomp_ctx_destroy(client->pomp);
 	if (ret != 0) {
@@ -950,6 +972,60 @@ out:
 }
 
 
+static void rtsp_client_timer_cb(
+	struct pomp_timer *timer,
+	void *userdata)
+{
+	struct rtsp_client *client = (struct rtsp_client *)userdata;
+	int err;
+	char *request = NULL;
+	struct pomp_buffer *req_buf = NULL;
+	int waiting_reply;
+
+	/* check that the client state is valid  */
+	pthread_mutex_lock(&client->mutex);
+	waiting_reply = client->waiting_reply;
+	pthread_mutex_unlock(&client->mutex);
+	RTSP_RETURN_IF_FAILED(waiting_reply == 0, -EBUSY);
+	RTSP_RETURN_IF_FAILED(client->session_id != NULL, -EPERM);
+
+	/* create request */
+	request = calloc(client->max_msg_size, 1);
+	RTSP_RETURN_IF_FAILED(request != NULL, -ENOMEM);
+
+	err = snprintf(request, client->max_msg_size,
+		RTSP_METHOD_GET_PARAMETER " %s " RTSP_VERSION "\n"
+		RTSP_HEADER_CSEQ ": %d\n"
+		RTSP_HEADER_USER_AGENT ": %s\n"
+		RTSP_HEADER_SESSION ": %s\n\n",
+		client->content_base, ++client->cseq,
+		client->user_agent, client->session_id);
+	if (err < 0) {
+		RTSP_LOGE("failed to write request");
+		goto out;
+	}
+
+	/* update the state */
+	pthread_mutex_lock(&client->mutex);
+	client->client_state = RTSP_CLIENT_STATE_KEEPALIVE_WAITING_REPLY;
+	client->waiting_reply = 1;
+	pthread_mutex_unlock(&client->mutex);
+
+	/* send the request */
+	req_buf = pomp_buffer_new_with_data(request, strlen(request));
+	err = pomp_ctx_send_raw_buf(client->pomp, req_buf);
+	if (err < 0) {
+		RTSP_LOG_ERRNO("failed to send request", -err);
+		goto out;
+	}
+
+out:
+	if (req_buf)
+		pomp_buffer_unref(req_buf);
+	free(request);
+}
+
+
 static void rtsp_client_pomp_cb(
 	struct pomp_ctx *ctx,
 	struct pomp_conn *conn,
@@ -1031,6 +1107,15 @@ static void rtsp_client_pomp_cb(
 
 		pthread_mutex_lock(&client->mutex);
 
+		client->timeout = header->timeout;
+		if (client->timeout > 0) {
+			/* set the timer to 80% of the timeout value */
+			ret = pomp_timer_set(client->timer,
+				client->timeout * 800);
+			if (ret != 0)
+				RTSP_LOG_ERRNO("failed to set timer", -ret);
+		}
+
 		if (header->content_encoding) {
 			xfree((void **)&client->content_encoding);
 			client->content_encoding =
@@ -1087,6 +1172,12 @@ static void rtsp_client_pomp_cb(
 			client->server_control_port =
 				header->transport.server_control_port;
 			client->client_state = RTSP_CLIENT_STATE_SETUP_OK;
+		}
+
+		if (client->client_state ==
+			RTSP_CLIENT_STATE_KEEPALIVE_WAITING_REPLY) {
+			client->waiting_reply = 0;
+			client->client_state = RTSP_CLIENT_STATE_IDLE;
 		}
 
 		if (client->client_state ==

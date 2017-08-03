@@ -263,6 +263,7 @@ enum rtsp_client_state {
 	RTSP_CLIENT_STATE_PLAY_OK,
 	RTSP_CLIENT_STATE_TEARDOWN_WAITING_REPLY,
 	RTSP_CLIENT_STATE_TEARDOWN_OK,
+	RTSP_CLIENT_STATE_KEEPALIVE_WAITING_REPLY,
 };
 
 
@@ -284,7 +285,7 @@ struct rtsp_response_header {
 	char *content_location;
 	int cseq;
 	char *session_id;
-	int timeout;
+	unsigned int timeout;
 	struct rtsp_transport_header transport;
 	char *body;
 };
@@ -300,6 +301,7 @@ struct rtsp_client {
 	struct sockaddr_in remote_addr_in;
 	struct pomp_loop *loop;
 	struct pomp_ctx *pomp;
+	struct pomp_timer *timer;
 	int connect_pipe[2];
 	struct mbox *mbox;
 	unsigned int max_msg_size;
@@ -311,6 +313,7 @@ struct rtsp_client {
 	int playing;
 	unsigned int cseq;
 	char *session_id;
+	unsigned int timeout;
 
 	char *user_agent;
 	char *content_encoding;
