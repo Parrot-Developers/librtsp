@@ -79,11 +79,24 @@
 #define RTSP_METHOD_REDIRECT            "REDIRECT"
 #define RTSP_METHOD_RECORD              "RECORD"
 
+#define RTSP_METHOD_FLAG_OPTIONS        0x00000001UL
+#define RTSP_METHOD_FLAG_DESCRIBE       0x00000002UL
+#define RTSP_METHOD_FLAG_ANNOUNCE       0x00000004UL
+#define RTSP_METHOD_FLAG_SETUP          0x00000008UL
+#define RTSP_METHOD_FLAG_PLAY           0x00000010UL
+#define RTSP_METHOD_FLAG_PAUSE          0x00000020UL
+#define RTSP_METHOD_FLAG_TEARDOWN       0x00000040UL
+#define RTSP_METHOD_FLAG_GET_PARAMETER  0x00000080UL
+#define RTSP_METHOD_FLAG_SET_PARAMETER  0x00000100UL
+#define RTSP_METHOD_FLAG_REDIRECT       0x00000200UL
+#define RTSP_METHOD_FLAG_RECORD         0x00000400UL
+
 #define RTSP_HEADER_CSEQ                "Cseq"
 #define RTSP_HEADER_CONNECTION          "Connection"
 #define RTSP_HEADER_SESSION             "Session"
 #define RTSP_HEADER_SESSION_TIMEOUT     "timeout"
 #define RTSP_HEADER_TRANSPORT           "Transport"
+#define RTSP_HEADER_PUBLIC              "Public"
 #define RTSP_HEADER_CONTENT_LANGUAGE    "Content-Language"
 #define RTSP_HEADER_CONTENT_ENCODING    "Content-Encoding"
 #define RTSP_HEADER_CONTENT_LENGTH      "Content-Length"
@@ -284,6 +297,7 @@ struct rtsp_response_header {
 	char *content_base;
 	char *content_location;
 	int cseq;
+	uint32_t options;
 	char *session_id;
 	unsigned int timeout;
 	struct rtsp_transport_header transport;
@@ -314,6 +328,7 @@ struct rtsp_client {
 	unsigned int cseq;
 	char *session_id;
 	unsigned int timeout;
+	uint32_t options;
 
 	char *user_agent;
 	char *content_encoding;

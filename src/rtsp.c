@@ -86,6 +86,59 @@ static int rtsp_parse_transport_header(char *value,
 }
 
 
+static int rtsp_parse_public_header(char *value, uint32_t *options)
+{
+	char *method, *temp = NULL;
+	uint32_t _options = 0;
+
+	RTSP_RETURN_ERR_IF_FAILED(value != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(options != NULL, -EINVAL);
+
+	method = strtok_r(value, ",", &temp);
+	while (method) {
+		if (*method == ' ')
+			method++;
+		if (!strncmp(method, RTSP_METHOD_OPTIONS,
+			strlen(RTSP_METHOD_OPTIONS)))
+			_options |= RTSP_METHOD_FLAG_OPTIONS;
+		else if (!strncmp(method, RTSP_METHOD_DESCRIBE,
+			strlen(RTSP_METHOD_DESCRIBE)))
+			_options |= RTSP_METHOD_FLAG_DESCRIBE;
+		else if (!strncmp(method, RTSP_METHOD_ANNOUNCE,
+			strlen(RTSP_METHOD_ANNOUNCE)))
+			_options |= RTSP_METHOD_FLAG_ANNOUNCE;
+		else if (!strncmp(method, RTSP_METHOD_SETUP,
+			strlen(RTSP_METHOD_SETUP)))
+			_options |= RTSP_METHOD_FLAG_SETUP;
+		else if (!strncmp(method, RTSP_METHOD_PLAY,
+			strlen(RTSP_METHOD_PLAY)))
+			_options |= RTSP_METHOD_FLAG_PLAY;
+		else if (!strncmp(method, RTSP_METHOD_PAUSE,
+			strlen(RTSP_METHOD_PAUSE)))
+			_options |= RTSP_METHOD_FLAG_PAUSE;
+		else if (!strncmp(method, RTSP_METHOD_TEARDOWN,
+			strlen(RTSP_METHOD_TEARDOWN)))
+			_options |= RTSP_METHOD_FLAG_TEARDOWN;
+		else if (!strncmp(method, RTSP_METHOD_GET_PARAMETER,
+			strlen(RTSP_METHOD_GET_PARAMETER)))
+			_options |= RTSP_METHOD_FLAG_GET_PARAMETER;
+		else if (!strncmp(method, RTSP_METHOD_SET_PARAMETER,
+			strlen(RTSP_METHOD_SET_PARAMETER)))
+			_options |= RTSP_METHOD_FLAG_SET_PARAMETER;
+		else if (!strncmp(method, RTSP_METHOD_REDIRECT,
+			strlen(RTSP_METHOD_REDIRECT)))
+			_options |= RTSP_METHOD_FLAG_REDIRECT;
+		else if (!strncmp(method, RTSP_METHOD_RECORD,
+			strlen(RTSP_METHOD_RECORD)))
+			_options |= RTSP_METHOD_FLAG_RECORD;
+		method = strtok_r(NULL, ",", &temp);
+	}
+
+	*options = _options;
+	return 0;
+}
+
+
 int rtsp_response_header_copy(struct rtsp_response_header *src,
 	struct rtsp_response_header *dst)
 {
@@ -100,6 +153,7 @@ int rtsp_response_header_copy(struct rtsp_response_header *src,
 	dst->content_language = xstrdup(src->content_language);
 	dst->content_base = xstrdup(src->content_base);
 	dst->content_location = xstrdup(src->content_location);
+	dst->options = src->options;
 	dst->cseq = src->cseq;
 	dst->session_id = xstrdup(src->session_id);
 	dst->timeout = src->timeout;
@@ -239,9 +293,20 @@ int rtsp_response_header_parse(char *response,
 					&header->transport);
 				if (ret != 0) {
 					RTSP_LOGE("failed to parse "
-						"transport header");
+						"'transport' header");
 					return -1;
 				}
+			} else if (!strncasecmp(field,
+				RTSP_HEADER_PUBLIC,
+				strlen(RTSP_HEADER_PUBLIC))) {
+				int ret = rtsp_parse_public_header(value,
+					&header->options);
+				if (ret != 0) {
+					RTSP_LOGE("failed to parse "
+						"'public' header");
+					return -1;
+				}
+
 			}
 		}
 

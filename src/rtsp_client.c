@@ -480,6 +480,8 @@ int rtsp_client_describe(
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(session_description != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED((client->options == 0) ||
+		(client->options & RTSP_METHOD_FLAG_DESCRIBE), -ENOSYS);
 
 	/* check that the client state is valid  */
 	pthread_mutex_lock(&client->mutex);
@@ -570,6 +572,8 @@ int rtsp_client_setup(
 	RTSP_RETURN_ERR_IF_FAILED(client_control_port != 0, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(server_stream_port != NULL, -EINVAL);
 	RTSP_RETURN_ERR_IF_FAILED(server_control_port != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED((client->options == 0) ||
+		(client->options & RTSP_METHOD_FLAG_SETUP), -ENOSYS);
 
 	/* check that the client state is valid  */
 	pthread_mutex_lock(&client->mutex);
@@ -685,6 +689,8 @@ int rtsp_client_play(
 	struct timespec ts;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED((client->options == 0) ||
+		(client->options & RTSP_METHOD_FLAG_PLAY), -ENOSYS);
 
 	/* check that the client state is valid  */
 	pthread_mutex_lock(&client->mutex);
@@ -767,6 +773,8 @@ int rtsp_client_teardown(
 	struct timespec ts;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED((client->options == 0) ||
+		(client->options & RTSP_METHOD_FLAG_TEARDOWN), -ENOSYS);
 
 	/* check that the client state is valid  */
 	pthread_mutex_lock(&client->mutex);
@@ -982,6 +990,9 @@ static void rtsp_client_timer_cb(
 	struct pomp_buffer *req_buf = NULL;
 	int waiting_reply;
 
+	RTSP_RETURN_IF_FAILED((client->options == 0) ||
+		(client->options & RTSP_METHOD_FLAG_GET_PARAMETER), -ENOSYS);
+
 	/* check that the client state is valid  */
 	pthread_mutex_lock(&client->mutex);
 	waiting_reply = client->waiting_reply;
@@ -1150,8 +1161,10 @@ static void rtsp_client_pomp_cb(
 		}
 
 		if (client->client_state ==
-			RTSP_CLIENT_STATE_OPTIONS_WAITING_REPLY)
+			RTSP_CLIENT_STATE_OPTIONS_WAITING_REPLY) {
+			client->options = header->options;
 			client->client_state = RTSP_CLIENT_STATE_OPTIONS_OK;
+		}
 
 		if (client->client_state ==
 			RTSP_CLIENT_STATE_DESCRIBE_WAITING_REPLY) {
