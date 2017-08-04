@@ -86,6 +86,33 @@ static int rtsp_parse_transport_header(char *value,
 }
 
 
+static int rtsp_parse_session_header(char *value,
+	char **session_id, unsigned int *timeout)
+{
+	RTSP_RETURN_ERR_IF_FAILED(value != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(session_id != NULL, -EINVAL);
+	RTSP_RETURN_ERR_IF_FAILED(timeout != NULL, -EINVAL);
+
+	char *p3 = strchr(value, ';');
+	char *timeout_str = NULL;
+
+	if (p3) {
+		timeout_str = p3 + 1;
+		*p3 = '\0';
+	}
+	if ((timeout_str) && (!strncmp(timeout_str,
+		RTSP_HEADER_SESSION_TIMEOUT,
+		strlen(RTSP_HEADER_SESSION_TIMEOUT)))) {
+		char *p4 = strchr(timeout_str, '=');
+		if (p4)
+			*timeout = atoi(p4 + 1);
+	}
+
+	*session_id = value;
+	return 0;
+}
+
+
 static int rtsp_parse_public_header(char *value, uint32_t *options)
 {
 	char *method, *temp = NULL;
@@ -248,20 +275,13 @@ int rtsp_response_header_parse(char *response,
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_SESSION,
 				strlen(RTSP_HEADER_SESSION))) {
-				char *p3 = strchr(value, ';');
-				char *timeout_str = NULL;
-				if (p3) {
-					timeout_str = p3 + 1;
-					*p3 = '\0';
+				int ret = rtsp_parse_session_header(value,
+					&header->session_id, &header->timeout);
+				if (ret != 0) {
+					RTSP_LOGE("failed to parse "
+						"'session' header");
+					return -1;
 				}
-				if ((timeout_str) && (!strncmp(timeout_str,
-					RTSP_HEADER_SESSION_TIMEOUT,
-					strlen(RTSP_HEADER_SESSION_TIMEOUT)))) {
-					char *p4 = strchr(timeout_str, '=');
-					if (p4)
-						header->timeout = atoi(p4 + 1);
-				}
-				header->session_id = value;
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_CONTENT_LENGTH,
 				strlen(RTSP_HEADER_CONTENT_LENGTH))) {
