@@ -1063,7 +1063,7 @@ static void rtsp_client_pomp_cb(
 	if (client->pending_content_length == 0) {
 		/* new message, parse the response header */
 		memset(&new_header, 0, sizeof(new_header));
-		ret = rtsp_response_header_parse(response, &new_header);
+		ret = rtsp_response_header_read(response, &new_header);
 		if (ret != 0) {
 			RTSP_LOGE("failed to parse response header");
 			goto error;

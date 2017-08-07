@@ -158,9 +158,9 @@ int main(int argc, char **argv)
 	}
 
 	if ((!stopping) && (sdp_str)) {
-		sdp = sdp_parse_session_description(sdp_str);
+		sdp = sdp_description_read(sdp_str);
 		if (!sdp) {
-			ULOGE("sdp_parse_session_description() failed");
+			ULOGE("sdp_description_read() failed");
 			ret = EXIT_FAILURE;
 			stopping = 1;
 		} else {

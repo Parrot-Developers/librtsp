@@ -358,7 +358,7 @@ int rtsp_response_header_copy(struct rtsp_response_header *src,
 int rtsp_response_header_free(struct rtsp_response_header *header);
 
 
-int rtsp_response_header_parse(char *response,
+int rtsp_response_header_read(char *response,
 	struct rtsp_response_header *header);
 
 

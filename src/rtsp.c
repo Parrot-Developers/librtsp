@@ -39,7 +39,7 @@
 #include "rtsp.h"
 
 
-static int rtsp_parse_transport_header(char *value,
+static int rtsp_transport_header_read(char *value,
 	struct rtsp_transport_header *transport)
 {
 	char *_transport, *param, *temp = NULL;
@@ -86,7 +86,7 @@ static int rtsp_parse_transport_header(char *value,
 }
 
 
-static int rtsp_parse_session_header(char *value,
+static int rtsp_session_header_read(char *value,
 	char **session_id, unsigned int *timeout)
 {
 	RTSP_RETURN_ERR_IF_FAILED(value != NULL, -EINVAL);
@@ -113,7 +113,7 @@ static int rtsp_parse_session_header(char *value,
 }
 
 
-static int rtsp_parse_public_header(char *value, uint32_t *options)
+static int rtsp_public_header_read(char *value, uint32_t *options)
 {
 	char *method, *temp = NULL;
 	uint32_t _options = 0;
@@ -211,7 +211,7 @@ int rtsp_response_header_free(struct rtsp_response_header *header)
 }
 
 
-int rtsp_response_header_parse(char *response,
+int rtsp_response_header_read(char *response,
 	struct rtsp_response_header *header)
 {
 	char *p, *temp, *temp2;
@@ -275,7 +275,7 @@ int rtsp_response_header_parse(char *response,
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_SESSION,
 				strlen(RTSP_HEADER_SESSION))) {
-				int ret = rtsp_parse_session_header(value,
+				int ret = rtsp_session_header_read(value,
 					&header->session_id, &header->timeout);
 				if (ret != 0) {
 					RTSP_LOGE("failed to parse "
@@ -309,7 +309,7 @@ int rtsp_response_header_parse(char *response,
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_TRANSPORT,
 				strlen(RTSP_HEADER_TRANSPORT))) {
-				int ret = rtsp_parse_transport_header(value,
+				int ret = rtsp_transport_header_read(value,
 					&header->transport);
 				if (ret != 0) {
 					RTSP_LOGE("failed to parse "
@@ -319,7 +319,7 @@ int rtsp_response_header_parse(char *response,
 			} else if (!strncasecmp(field,
 				RTSP_HEADER_PUBLIC,
 				strlen(RTSP_HEADER_PUBLIC))) {
-				int ret = rtsp_parse_public_header(value,
+				int ret = rtsp_public_header_read(value,
 					&header->options);
 				if (ret != 0) {
 					RTSP_LOGE("failed to parse "
