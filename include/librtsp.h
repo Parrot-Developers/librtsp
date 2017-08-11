@@ -75,7 +75,8 @@ int rtsp_client_connect(
 
 
 int rtsp_client_disconnect(
-	struct rtsp_client *client);
+	struct rtsp_client *client,
+	unsigned int timeout_ms);
 
 
 int rtsp_client_options(

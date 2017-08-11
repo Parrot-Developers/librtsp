@@ -368,11 +368,13 @@ out:
 
 
 int rtsp_client_disconnect(
-	struct rtsp_client *client)
+	struct rtsp_client *client,
+	unsigned int timeout_ms)
 {
 	int ret = 0;
 	char *buf = "x";
 	ssize_t err;
+	struct timespec ts;
 
 	RTSP_RETURN_ERR_IF_FAILED(client != NULL, -EINVAL);
 
@@ -387,6 +389,20 @@ int rtsp_client_disconnect(
 	do
 		err = write(client->connect_pipe[1], buf, 1);
 	while ((err == -1) && (errno == EINTR));
+
+	/* wait for disconnection event */
+	pthread_mutex_lock(&client->mutex);
+	if (timeout_ms > 0) {
+		get_time_with_ms_delay(&ts, timeout_ms);
+		err = pthread_cond_timedwait(
+			&client->cond, &client->mutex, &ts);
+	} else
+		err = pthread_cond_wait(&client->cond, &client->mutex);
+	pthread_mutex_unlock(&client->mutex);
+	if (err == ETIMEDOUT) {
+		RTSP_LOGE("timeout waiting for disconnection");
+		ret = -ETIMEDOUT;
+	}
 
 	return ret;
 }
@@ -922,6 +938,7 @@ static void rtsp_client_pomp_event_cb(
 	case POMP_EVENT_DISCONNECTED:
 		RTSP_LOGI("client disconnected");
 		client->tcp_state = RTSP_TCP_STATE_IDLE;
+		pthread_cond_signal(&client->cond);
 		break;
 
 	default:

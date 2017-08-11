@@ -215,7 +215,7 @@ int main(int argc, char **argv)
 
 cleanup:
 	if (client) {
-		err = rtsp_client_disconnect(client);
+		err = rtsp_client_disconnect(client, 2000);
 		if (err) {
 			ULOGE("rtsp_client_options() failed");
 			ret = EXIT_FAILURE;
