@@ -383,10 +383,9 @@ static inline void get_time_with_ms_delay(
 	struct timeval tp;
 	gettimeofday(&tp, NULL);
 
-	ts->tv_sec = tp.tv_sec;
-	ts->tv_nsec = tp.tv_usec * 1000 + delay * 1000000;
-	ts->tv_sec += ts->tv_nsec / 1000000000L;
-	ts->tv_nsec = ts->tv_nsec % 1000000000L;
+	struct timespec ts2;
+	time_timeval_to_timespec(&tp, &ts2);
+	time_timespec_add_us(&ts2, (int64_t)delay * 1000, ts);
 }
 
 
