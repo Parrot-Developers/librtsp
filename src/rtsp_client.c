@@ -894,11 +894,13 @@ static void rtsp_client_pipe_cb(
 		}
 	} else {
 		ret = pomp_ctx_stop(client->pomp);
-		goto cleanup;
 		if (ret < 0) {
 			RTSP_LOG_ERRNO("failed to disconnect", -ret);
 			goto cleanup;
 		}
+		if (client->tcp_state == RTSP_TCP_STATE_IDLE)
+			/* the client is already disconnected */
+			pthread_cond_signal(&client->cond);
 	}
 
 	return;
