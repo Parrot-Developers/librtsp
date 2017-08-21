@@ -51,8 +51,8 @@ ULOG_DECLARE_TAG(rtsp_server_test);
 #include <libpomp.h>
 
 
-static int stopping = 0;
-struct pomp_loop *loop = NULL;
+static int stopping;
+struct pomp_loop *loop;
 
 
 static void sighandler(int signum)
@@ -71,6 +71,9 @@ int main(int argc, char **argv)
 	int ret = EXIT_SUCCESS, err;
 	int port = 0;
 	struct rtsp_server *server = NULL;
+
+	stopping = 0;
+	loop = NULL;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s <port>\n", argv[0]);
