@@ -1,45 +1,50 @@
 
 LOCAL_PATH := $(call my-dir)
 
-##################
-#  RTSP library  #
-##################
-
 include $(CLEAR_VARS)
 LOCAL_MODULE := librtsp
-LOCAL_DESCRIPTION := Real Time Streaming Protocol library
 LOCAL_CATEGORY_PATH := libs
-LOCAL_SRC_FILES := \
-    src/rtsp.c \
-    src/rtsp_server.c \
-    src/rtsp_client.c \
-    src/rtsp_log.c
+LOCAL_DESCRIPTION := Real Time Streaming Protocol library
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/include
-LOCAL_LIBRARIES := libpomp libfutils
-LOCAL_CONDITIONAL_LIBRARIES := OPTIONAL:libulog
-
+LOCAL_CFLAGS := -DRTSP_API_EXPORTS -fvisibility=hidden -std=gnu99
+LOCAL_SRC_FILES := \
+	src/rtsp.c \
+	src/rtsp_client.c \
+	src/rtsp_client_session.c \
+	src/rtsp_server.c \
+	src/rtsp_server_request.c \
+	src/rtsp_server_session.c
+LOCAL_LIBRARIES := \
+	libfutils \
+	libpomp \
+	libulog
 include $(BUILD_LIBRARY)
 
-############################
-#  Server test executable  #
-############################
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := rtsp_server_test
-LOCAL_DESCRIPTION := Real Time Streaming Protocol library server test program
+LOCAL_MODULE := rtsp-server-test
 LOCAL_CATEGORY_PATH := multimedia
-LOCAL_SRC_FILES := test/rtsp_server_test.c
-LOCAL_LIBRARIES := librtsp libpomp libulog
+LOCAL_DESCRIPTION := Real Time Streaming Protocol library server test program
+LOCAL_SRC_FILES := \
+	tests/rtsp_server_test.c
+LOCAL_LIBRARIES := \
+	libfutils \
+	libpomp \
+	librtsp \
+	libsdp \
+	libulog
 include $(BUILD_EXECUTABLE)
 
-############################
-#  Client test executable  #
-############################
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := rtsp_client_test
-LOCAL_DESCRIPTION := Real Time Streaming Protocol library client test program
+LOCAL_MODULE := rtsp-client-test
 LOCAL_CATEGORY_PATH := multimedia
-LOCAL_SRC_FILES := test/rtsp_client_test.c
-LOCAL_LIBRARIES := librtsp libsdp libpomp libulog
+LOCAL_DESCRIPTION := Real Time Streaming Protocol library client test program
+LOCAL_SRC_FILES := \
+	tests/rtsp_client_test.c
+LOCAL_LIBRARIES := \
+	libpomp \
+	librtsp \
+	libsdp \
+	libulog
 include $(BUILD_EXECUTABLE)
