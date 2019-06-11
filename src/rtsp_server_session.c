@@ -32,7 +32,8 @@
 
 
 struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
-						    unsigned int timeout_ms)
+						    unsigned int timeout_ms,
+						    const char *uri)
 {
 	int ret;
 	int found;
@@ -86,6 +87,9 @@ struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
 			}
 		}
 	} while (found);
+
+	/* store the URI */
+	session->uri = xstrdup(uri);
 
 	/* Add to the list */
 	list_add_before(&server->sessions, &session->node);
@@ -151,6 +155,7 @@ int rtsp_server_session_remove(struct rtsp_server *server,
 	if (ret < 0)
 		ULOG_ERRNO("pomp_loop_idle_remove", -ret);
 	free(session->session_id);
+	free(session->uri);
 	free(session);
 
 	return 0;
@@ -163,11 +168,12 @@ int rtsp_server_session_reset_timeout(struct rtsp_server_session *session)
 
 	ULOG_ERRNO_RETURN_ERR_IF(session == NULL, EINVAL);
 
-	/* Set the timer to 10% more than the advertised session timeout
+	/* Set the timer to >= 20% more than the advertised session timeout
 	 * because some players (like VLC) will only send GET_PARAMETER
 	 * request every 'timeout_ms' ms, which can cause timeouts here
 	 * otherwise due to latency */
-	ret = pomp_timer_set(session->timer, 1.1 * session->timeout_ms);
+	ret = pomp_timer_set(session->timer,
+			     ((12 * session->timeout_ms) + 9) / 10);
 	if (ret < 0)
 		ULOG_ERRNO("pomp_timer_set", -ret);
 
@@ -186,7 +192,8 @@ struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
 
 	list_walk_entry_forward(&server->sessions, session, node)
 	{
-		if (strncmp(session->session_id,
+		if (session->session_id != NULL &&
+		    strncmp(session->session_id,
 			    session_id,
 			    RTSP_SERVER_SESSION_ID_LENGTH) == 0) {
 			found = 1;
@@ -275,7 +282,7 @@ rtsp_server_session_media_find(struct rtsp_server *server,
 
 	list_walk_entry_forward(&session->medias, media, node)
 	{
-		if (strncmp(media->path, path, strlen(media->path)) == 0) {
+		if (strcmp(media->path, path) == 0) {
 			found = 1;
 			break;
 		}

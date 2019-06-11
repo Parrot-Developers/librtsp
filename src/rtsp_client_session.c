@@ -82,10 +82,10 @@ error:
 }
 
 
-int rtsp_client_remove_session(struct rtsp_client *client,
-			       const char *session_id,
-			       int status_code,
-			       int nexist_ok)
+int rtsp_client_remove_session_internal(struct rtsp_client *client,
+					const char *session_id,
+					int status_code,
+					int nexist_ok)
 {
 	struct rtsp_client_session *session;
 	int found = 0;

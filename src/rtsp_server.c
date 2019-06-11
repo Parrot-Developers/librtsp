@@ -208,6 +208,8 @@ void rtsp_server_session_timer_cb(struct pomp_timer *timer, void *userdata)
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_SESSION_TIMEOUT,
 			NULL,
+			0,
+			NULL,
 			(void *)media,
 			media->userdata,
 			server->cbs_userdata);
@@ -260,9 +262,6 @@ static void rtsp_server_pomp_event_cb(struct pomp_ctx *ctx,
 			ULOGI("client connected (%s)", addr);
 		else
 			ULOGI("client connected");
-		if (server->cbs.socket_cb)
-			(*server->cbs.socket_cb)(pomp_conn_get_fd(conn),
-						 server->cbs_userdata);
 		break;
 
 	case POMP_EVENT_DISCONNECTED:
@@ -380,8 +379,13 @@ static int rtsp_server_describe(struct rtsp_server *server,
 	if (ret < 0)
 		goto out;
 	request->in_callback = 1;
-	(*server->cbs.describe)(
-		server, host, path, (void *)request, server->cbs_userdata);
+	(*server->cbs.describe)(server,
+				host,
+				path,
+				request->request_header.ext,
+				request->request_header.ext_count,
+				(void *)request,
+				server->cbs_userdata);
 
 out:
 	request->in_callback = 0;
@@ -419,7 +423,8 @@ static int rtsp_server_setup(struct rtsp_server *server,
 	if (request->request_header.session_id == NULL) {
 		/* New session */
 		session = rtsp_server_session_add(server,
-						  server->session_timeout_ms);
+						  server->session_timeout_ms,
+						  request->request_header.uri);
 		if (session == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -457,6 +462,8 @@ static int rtsp_server_setup(struct rtsp_server *server,
 		server,
 		path,
 		session->session_id,
+		request->request_header.ext,
+		request->request_header.ext_count,
 		(void *)request,
 		(void *)media,
 		request->request_header.transport[0]->delivery,
@@ -524,13 +531,18 @@ static int rtsp_server_play(struct rtsp_server *server,
 			ret = -ENOMEM;
 			goto out;
 		}
+	}
+	list_walk_entry_forward(&request->medias, req_media, node)
+	{
 		(*server->cbs.play)(server,
 				    session->session_id,
+				    request->request_header.ext,
+				    request->request_header.ext_count,
 				    (void *)request,
-				    (void *)media,
+				    (void *)req_media->media,
 				    &request->request_header.range,
 				    request->request_header.scale,
-				    media->userdata,
+				    req_media->media->userdata,
 				    server->cbs_userdata);
 	}
 
@@ -591,12 +603,17 @@ static int rtsp_server_pause(struct rtsp_server *server,
 			ret = -ENOMEM;
 			goto out;
 		}
+	}
+	list_walk_entry_forward(&request->medias, req_media, node)
+	{
 		(*server->cbs.pause)(server,
 				     session->session_id,
+				     request->request_header.ext,
+				     request->request_header.ext_count,
 				     (void *)request,
-				     (void *)media,
+				     (void *)req_media->media,
 				     &request->request_header.range,
-				     media->userdata,
+				     req_media->media->userdata,
 				     server->cbs_userdata);
 	}
 
@@ -654,16 +671,21 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 		req_media = rtsp_server_pending_request_media_add(
 			server, request, media);
 		if (req_media == NULL) {
-			ret = ENOMEM;
+			ret = -ENOMEM;
 			goto out;
 		}
+	}
+	list_walk_entry_forward(&request->medias, req_media, node)
+	{
 		(*server->cbs.teardown)(
 			server,
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_CLIENT_REQUEST,
+			request->request_header.ext,
+			request->request_header.ext_count,
 			(void *)request,
-			(void *)media,
-			media->userdata,
+			(void *)req_media->media,
+			req_media->media->userdata,
 			server->cbs_userdata);
 	}
 
@@ -961,6 +983,76 @@ static void rtsp_server_pomp_cb(struct pomp_ctx *ctx,
 }
 
 
+static int rtsp_server_send_teardown(struct rtsp_server *server,
+				     const char *uri,
+				     const char *session_id,
+				     const struct rtsp_header_ext *ext,
+				     size_t ext_count)
+{
+	struct rtsp_request_header header;
+	struct pomp_buffer *req_buf;
+	struct rtsp_string request;
+	int ret = 0;
+
+	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(uri == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(uri[0] == 0, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
+
+	memset(&header, 0, sizeof(header));
+	memset(&request, 0, sizeof(request));
+
+	header.method = RTSP_METHOD_TYPE_TEARDOWN;
+	header.cseq = server->cseq++;
+	header.session_id = strdup(session_id);
+	if (header.session_id == NULL) {
+		ret = -ENOMEM;
+		ULOG_ERRNO("strdup", -ret);
+		goto out;
+	}
+	ret = rtsp_request_header_copy_ext(&header, ext, ext_count);
+	if (ret < 0)
+		goto out;
+	ret = asprintf(&header.uri, "/%s", uri);
+	if (ret <= 0) {
+		ret = -ENOMEM;
+		ULOG_ERRNO("asprintf", -ret);
+		goto out;
+	}
+
+	/* Create the request */
+	memset(&request, 0, sizeof(request));
+	request.max_len = server->max_msg_size;
+	request.str = calloc(server->max_msg_size, 1);
+	if (request.str == NULL) {
+		ret = -ENOMEM;
+		ULOG_ERRNO("calloc", -ret);
+		goto out;
+	}
+
+	ret = rtsp_request_header_write(&header, &request);
+	if (ret < 0)
+		goto out;
+
+	if (request.len > 0) {
+		/* Send the request */
+		ULOGI("send RTSP request %s: cseq=%d session=%s",
+		      rtsp_method_type_str(header.method),
+		      header.cseq,
+		      header.session_id ? header.session_id : "-");
+		req_buf = pomp_buffer_new_with_data(request.str, request.len);
+		ret = pomp_ctx_send_raw_buf(server->pomp, req_buf);
+		pomp_buffer_unref(req_buf);
+	}
+
+out:
+	free(header.session_id);
+	free(header.uri);
+	free(request.str);
+	return ret;
+}
+
+
 int rtsp_server_new(const char *software_name,
 		    uint16_t port,
 		    int reply_timeout_ms,
@@ -1144,6 +1236,8 @@ int rtsp_server_destroy(struct rtsp_server *server)
 int rtsp_server_reply_to_describe(struct rtsp_server *server,
 				  void *request_ctx,
 				  int status,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count,
 				  char *session_description)
 {
 	int ret = 0;
@@ -1158,7 +1252,7 @@ int rtsp_server_reply_to_describe(struct rtsp_server *server,
 
 	memset(&response, 0, sizeof(response));
 
-	request = (struct rtsp_server_pending_request *)request_ctx;
+	request = request_ctx;
 	ret = rtsp_server_pending_request_find(server, request);
 	if (ret < 0) {
 		ULOG_ERRNO("rtsp_server_pending_request_find", -ret);
@@ -1205,6 +1299,12 @@ int rtsp_server_reply_to_describe(struct rtsp_server *server,
 	/* TODO */
 	request->response_header.content_base =
 		strdup(request->request_header.uri);
+	ret = rtsp_response_header_copy_ext(
+		&request->response_header, ext, ext_count);
+	if (ret < 0) {
+		error_status = RTSP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+		goto out;
+	}
 
 	/* Create the response */
 	response.max_len = server->max_msg_size;
@@ -1276,6 +1376,8 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 			       uint16_t src_control_port,
 			       int ssrc_valid,
 			       uint32_t ssrc,
+			       const struct rtsp_header_ext *ext,
+			       size_t ext_count,
 			       void *stream_userdata)
 {
 	int ret = 0, failed = 0;
@@ -1293,7 +1395,10 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 
 	memset(&response, 0, sizeof(response));
 
-	request = (struct rtsp_server_pending_request *)request_ctx;
+	request = request_ctx;
+	media = media_ctx;
+	session = media->session;
+
 	ret = rtsp_server_pending_request_find(server, request);
 	if (ret < 0) {
 		ULOG_ERRNO("rtsp_server_pending_request_find", -ret);
@@ -1301,12 +1406,10 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 		goto out;
 	}
 
-	media = media_ctx;
-	if (media->session == NULL) {
+	if (session == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
-	session = media->session;
 	media->userdata = stream_userdata;
 
 	if (request->conn == NULL) {
@@ -1369,6 +1472,13 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 	request->response_header.transport->src_control_port = src_control_port;
 	request->response_header.transport->ssrc_valid = ssrc_valid;
 	request->response_header.transport->ssrc = ssrc;
+	ret = rtsp_response_header_copy_ext(
+		&request->response_header, ext, ext_count);
+	if (ret < 0) {
+		failed = 1;
+		error_status = RTSP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+		goto out;
+	}
 
 	/* Create the response */
 	response.max_len = server->max_msg_size;
@@ -1456,7 +1566,9 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 			      int seq_valid,
 			      uint16_t seq,
 			      int rtptime_valid,
-			      uint32_t rtptime)
+			      uint32_t rtptime,
+			      const struct rtsp_header_ext *ext,
+			      size_t ext_count)
 {
 	int ret = 0, found = 0, replied = 0;
 	struct rtsp_server_pending_request *request = NULL;
@@ -1474,7 +1586,10 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 
 	memset(&response, 0, sizeof(response));
 
-	request = (struct rtsp_server_pending_request *)request_ctx;
+	request = request_ctx;
+	media = media_ctx;
+	session = media->session;
+
 	ret = rtsp_server_pending_request_find(server, request);
 	if (ret < 0) {
 		ULOG_ERRNO("rtsp_server_pending_request_find", -ret);
@@ -1504,12 +1619,10 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 		goto out;
 	}
 
-	media = (struct rtsp_server_session_media *)media_ctx;
-	if (media->session == NULL) {
+	if (session == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
-	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
 		if (req_media->media == media) {
@@ -1587,16 +1700,25 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 		}
 
 		request->response_header.status_code = status_code;
+		free(request->response_header.status_string);
 		request->response_header.status_string = strdup(status_string);
 		request->response_header.cseq = request->request_header.cseq;
+		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
 		time(&request->response_header.date);
+		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(session->session_id);
 		request->response_header.session_timeout =
 			session->timeout_ms / 1000;
 		request->response_header.range = session->range;
 		request->response_header.scale = session->scale;
+		ret = rtsp_response_header_copy_ext(
+			&request->response_header, ext, ext_count);
+		if (ret < 0) {
+			error_status = RTSP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+			goto out;
+		}
 
 		/* Create the response */
 		response.max_len = server->max_msg_size;
@@ -1664,7 +1786,9 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 			       void *request_ctx,
 			       void *media_ctx,
 			       int status,
-			       struct rtsp_range *range)
+			       struct rtsp_range *range,
+			       const struct rtsp_header_ext *ext,
+			       size_t ext_count)
 {
 	int ret = 0, found = 0, replied = 0;
 	struct rtsp_server_pending_request *request = NULL;
@@ -1682,7 +1806,10 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 
 	memset(&response, 0, sizeof(response));
 
-	request = (struct rtsp_server_pending_request *)request_ctx;
+	request = request_ctx;
+	media = media_ctx;
+	session = media->session;
+
 	ret = rtsp_server_pending_request_find(server, request);
 	if (ret < 0) {
 		ULOG_ERRNO("rtsp_server_pending_request_find", -ret);
@@ -1712,12 +1839,10 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 		goto out;
 	}
 
-	media = (struct rtsp_server_session_media *)media_ctx;
-	if (media->session == NULL) {
+	if (session == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
-	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
 		if (req_media->media == media) {
@@ -1766,15 +1891,25 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 		}
 
 		request->response_header.status_code = status_code;
+		free(request->response_header.status_string);
 		request->response_header.status_string = strdup(status_string);
 		request->response_header.cseq = request->request_header.cseq;
+		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
 		time(&request->response_header.date);
+		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(session->session_id);
 		request->response_header.session_timeout =
 			session->timeout_ms / 1000;
 		request->response_header.range = session->range;
+		ret = rtsp_response_header_copy_ext(
+			&request->response_header, ext, ext_count);
+		if (ret < 0) {
+			error_status = RTSP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+			replied = request->media_count;
+			goto out;
+		}
 
 		/* Create the response */
 		response.max_len = server->max_msg_size;
@@ -1843,7 +1978,9 @@ out:
 int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 				  void *request_ctx,
 				  void *media_ctx,
-				  int status)
+				  int status,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count)
 {
 	int ret = 0, found = 0, replied = 0;
 	struct rtsp_server_pending_request *request = NULL;
@@ -1861,7 +1998,10 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 
 	memset(&response, 0, sizeof(response));
 
-	request = (struct rtsp_server_pending_request *)request_ctx;
+	request = request_ctx;
+	media = media_ctx;
+	session = media->session;
+
 	ret = rtsp_server_pending_request_find(server, request);
 	if (ret < 0) {
 		ULOG_ERRNO("rtsp_server_pending_request_find", -ret);
@@ -1884,12 +2024,10 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 		goto out;
 	}
 
-	media = (struct rtsp_server_session_media *)media_ctx;
-	if (media->session == NULL) {
+	if (session == NULL) {
 		ret = -EINVAL;
 		goto out;
 	}
-	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
 		if (req_media->media == media) {
@@ -1923,14 +2061,24 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 		}
 
 		request->response_header.status_code = status_code;
+		free(request->response_header.status_string);
 		request->response_header.status_string = strdup(status_string);
 		request->response_header.cseq = request->request_header.cseq;
+		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
 		time(&request->response_header.date);
+		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(request->request_header.session_id);
 		request->response_header.session_timeout =
 			session->timeout_ms / 1000;
+		ret = rtsp_response_header_copy_ext(
+			&request->response_header, ext, ext_count);
+		if (ret < 0) {
+			error_status = RTSP_STATUS_CODE_INTERNAL_SERVER_ERROR;
+			replied = request->media_count;
+			goto out;
+		}
 
 		/* Create the response */
 		response.max_len = server->max_msg_size;
@@ -1999,6 +2147,8 @@ out:
 
 int rtsp_server_announce(struct rtsp_server *server,
 			 char *uri,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 char *session_description)
 {
 	struct rtsp_request_header header;
@@ -2020,6 +2170,9 @@ int rtsp_server_announce(struct rtsp_server *server,
 	header.content_type = RTSP_CONTENT_TYPE_SDP;
 	time(&header.date);
 	header.server = server->software_name;
+	ret = rtsp_request_header_copy_ext(&header, ext, ext_count);
+	if (ret < 0)
+		return ret;
 	ret = asprintf(&header.uri, "/%s", uri);
 	if (ret <= 0) {
 		ret = -ENOMEM;
@@ -2069,7 +2222,9 @@ out:
 
 
 int rtsp_server_force_session_teardown(struct rtsp_server *server,
-				       const char *session_id)
+				       const char *session_id,
+				       const struct rtsp_header_ext *ext,
+				       size_t ext_count)
 {
 	int ret;
 	struct rtsp_server_session *session = NULL;
@@ -2104,11 +2259,18 @@ int rtsp_server_force_session_teardown(struct rtsp_server *server,
 			server,
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_FORCED_TEARDOWN,
+			ext,
+			ext_count,
 			NULL,
 			(void *)media,
 			media->userdata,
 			server->cbs_userdata);
 	}
+
+	ret = rtsp_server_send_teardown(
+		server, session->uri, session->session_id, ext, ext_count);
+	if (ret < 0)
+		ULOG_ERRNO("rtsp_server_send_teardown", -ret);
 
 	ret = rtsp_server_session_remove(server, session);
 	return ret;

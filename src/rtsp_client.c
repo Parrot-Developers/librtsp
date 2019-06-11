@@ -188,17 +188,17 @@ static int send_request(struct rtsp_client *client, unsigned int timeout_ms)
 
 
 static int reset_keep_alive_timer(struct rtsp_client_session *session,
-				  unsigned int timer_sec)
+				  unsigned int timer_msec)
 {
 	int res;
 
 	ULOG_ERRNO_RETURN_ERR_IF(session == NULL, EINVAL);
 
-	if (timer_sec == 0 ||
+	if (timer_msec == 0 ||
 	    session->client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return 0;
 
-	res = pomp_timer_set(session->timer, timer_sec * 1000);
+	res = pomp_timer_set(session->timer, timer_msec);
 	if (res < 0)
 		ULOG_ERRNO("pomp_timer_set", -res);
 
@@ -225,7 +225,8 @@ static int send_keep_alive(struct rtsp_client *client,
 		ULOGI("trying to send a keep-alive while not connected, "
 		      "remove the session");
 		res = -EPIPE;
-		rtsp_client_remove_session(client, session->id, res, 0);
+		rtsp_client_remove_session_internal(
+			client, session->id, res, 0);
 		return res;
 	}
 
@@ -233,9 +234,9 @@ static int send_keep_alive(struct rtsp_client *client,
 	if (session->keep_alive_in_progress)
 		return -EBUSY;
 
-	/* Another request is pending, retry in 2 seconds */
+	/* Another request is pending, retry later */
 	if (client->request.is_pending) {
-		reset_keep_alive_timer(session, 2);
+		reset_keep_alive_timer(session, session->timeout_ms / 2);
 		return -EBUSY;
 	}
 
@@ -276,6 +277,8 @@ void rtsp_client_pomp_timer_cb(struct pomp_timer *timer, void *userdata)
 
 static int send_teardown(struct rtsp_client *client,
 			 const char *session_id,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *req_userdata,
 			 unsigned int timeout_ms,
 			 int internal)
@@ -304,12 +307,16 @@ static int send_teardown(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_TEARDOWN;
 	client->request.header.uri = xstrdup(session->content_base);
 	client->request.header.cseq = client->cseq;
 	client->request.header.user_agent = xstrdup(client->software_name);
 	client->request.header.session_id = xstrdup(session_id);
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -350,6 +357,8 @@ static void play_request_complete(struct rtsp_client *client,
 					 0,
 					 0,
 					 0,
+					 NULL,
+					 0,
 					 client->cbs_userdata,
 					 req_userdata);
 		return;
@@ -367,6 +376,8 @@ static void play_request_complete(struct rtsp_client *client,
 				 rtp_info->seq,
 				 rtp_info->rtptime_valid,
 				 rtp_info->rtptime,
+				 resp_h->ext,
+				 resp_h->ext_count,
 				 client->cbs_userdata,
 				 req_userdata);
 }
@@ -461,10 +472,19 @@ static int request_complete(struct rtsp_client *client,
 		}
 		session->keep_alive_in_progress = 0;
 
-		/* Set the timer to 80% of the timeout value */
-		session->timeout = resp_h->session_timeout;
-		err = reset_keep_alive_timer(session,
-					     session->timeout * 8 / 10);
+		/* Ensure our keep alive probes are received before the server
+		   time out by sending a probe at 80% of server's timeout,
+		   it will cope with a half-RTT jitter at most 20% of the
+		   server's timeout.
+		   To deal with more jitter, latency spike, eg. for one
+		   GET_PARAMS to be delayed on server side, double the frequency
+		   at which the client side emits them, so that it will cope
+		   with a half-RTT jitter equal to 60% of the server's timeout
+		 */
+		session->timeout_ms = 800 * resp_h->session_timeout;
+		session->timeout_ms /= 2;
+
+		err = reset_keep_alive_timer(session, session->timeout_ms);
 		if (err < 0)
 			ULOG_ERRNO("reset_keep_alive_timer", -err);
 
@@ -483,6 +503,8 @@ static int request_complete(struct rtsp_client *client,
 			status,
 			rtsp_status_to_errno(resp_h->status_code),
 			client->methods_allowed,
+			resp_h->ext,
+			resp_h->ext_count,
 			client->cbs_userdata,
 			req_userdata);
 		break;
@@ -504,6 +526,8 @@ static int request_complete(struct rtsp_client *client,
 			status,
 			rtsp_status_to_errno(resp_h->status_code),
 			content_base,
+			resp_h->ext,
+			resp_h->ext_count,
 			body_with_null,
 			client->cbs_userdata,
 			req_userdata);
@@ -520,6 +544,8 @@ static int request_complete(struct rtsp_client *client,
 				resp_h->transport->src_control_port,
 				resp_h->transport->ssrc_valid,
 				resp_h->transport->ssrc,
+				resp_h->ext,
+				resp_h->ext_count,
 				client->cbs_userdata,
 				req_userdata);
 		} else {
@@ -531,6 +557,8 @@ static int request_complete(struct rtsp_client *client,
 				0,
 				0,
 				0,
+				0,
+				NULL,
 				0,
 				client->cbs_userdata,
 				req_userdata);
@@ -552,6 +580,8 @@ static int request_complete(struct rtsp_client *client,
 				status,
 				rtsp_status_to_errno(resp_h->status_code),
 				&resp_h->range,
+				resp_h->ext,
+				resp_h->ext_count,
 				client->cbs_userdata,
 				req_userdata);
 		} else {
@@ -561,6 +591,8 @@ static int request_complete(struct rtsp_client *client,
 				status,
 				rtsp_status_to_errno(resp_h->status_code),
 				NULL,
+				resp_h->ext,
+				resp_h->ext_count,
 				client->cbs_userdata,
 				req_userdata);
 		}
@@ -575,6 +607,8 @@ static int request_complete(struct rtsp_client *client,
 				session_id,
 				status,
 				rtsp_status_to_errno(resp_h->status_code),
+				resp_h->ext,
+				resp_h->ext_count,
 				client->cbs_userdata,
 				req_userdata);
 			session->internal_teardown = 0;
@@ -594,11 +628,12 @@ static int request_complete(struct rtsp_client *client,
 				      session->failed_keep_alive);
 				internal_teardown = 1;
 			} else {
-				err = reset_keep_alive_timer(session, 1);
-				if (err < 0) {
-					ULOG_ERRNO("reset_keep_alive_timer",
-						   -err);
-				}
+				err = send_keep_alive(
+					session->client,
+					session,
+					RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
+				if (err < 0)
+					ULOG_ERRNO("send_keep_alive", -err);
 			}
 		} else {
 			session->failed_keep_alive = 0;
@@ -617,6 +652,8 @@ static int request_complete(struct rtsp_client *client,
 		err = send_teardown(client,
 				    session_id,
 				    NULL,
+				    0,
+				    NULL,
 				    RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS,
 				    1);
 		if (err < 0)
@@ -624,14 +661,14 @@ static int request_complete(struct rtsp_client *client,
 	}
 	if (session_removed) {
 		if (status == RTSP_CLIENT_REQ_STATUS_TIMEOUT) {
-			err = rtsp_client_remove_session(
+			err = rtsp_client_remove_session_internal(
 				client, session_id, -ETIMEDOUT, 0);
 		} else {
-			err = rtsp_client_remove_session(
+			err = rtsp_client_remove_session_internal(
 				client, session_id, resp_h->status_code, 0);
 		}
 		if (err < 0)
-			ULOG_ERRNO("rtsp_client_remove_session", -err);
+			ULOG_ERRNO("rtsp_client_remove_session_internal", -err);
 	}
 
 exit:
@@ -665,14 +702,17 @@ static void rtsp_client_pomp_event_cb(struct pomp_ctx *ctx,
 							client->cbs_userdata);
 		}
 		/* If a session already exists, send a keep-alive
-		 * in 2 seconds; this allows quickly seeing if a
+		 * right away; this allows quickly seeing if a
 		 * session timeout has occurred on the server side
 		 * during the time disconnected */
 		list_walk_entry_forward(&client->sessions, session, node)
 		{
-			res = reset_keep_alive_timer(session, 2);
+			res = send_keep_alive(
+				session->client,
+				session,
+				RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 			if (res < 0)
-				ULOG_ERRNO("reset_keep_alive_timer", -res);
+				ULOG_ERRNO("send_keep_alive", -res);
 		}
 		break;
 
@@ -757,6 +797,8 @@ static int rtsp_client_request_process(struct rtsp_client *client,
 			client_uri_to_content_base(client, msg->header.req.uri);
 		(*client->cbs.announce)(client,
 					content_base,
+					msg->header.req.ext,
+					msg->header.req.ext_count,
 					body_with_null,
 					client->cbs_userdata);
 		free(content_base);
@@ -772,6 +814,21 @@ static int rtsp_client_request_process(struct rtsp_client *client,
 			ULOGW("non-empty get parameter in RTSP client");
 			status_code = RTSP_STATUS_CODE_NOT_IMPLEMENTED;
 			status_string = RTSP_STATUS_STRING_NOT_IMPLEMENTED;
+		}
+		break;
+	case RTSP_METHOD_TYPE_TEARDOWN:
+		status_code = RTSP_STATUS_CODE_OK;
+		status_string = RTSP_STATUS_STRING_OK;
+		if (msg->header.req.session_id) {
+			ret = rtsp_client_remove_session_internal(
+				client,
+				msg->header.req.session_id,
+				RTSP_STATUS_CODE_OK,
+				0);
+			if (ret < 0)
+				ULOG_ERRNO(
+					"rtsp_client_remove_session_internal",
+					-ret);
 		}
 		break;
 	default:
@@ -1051,6 +1108,8 @@ int rtsp_client_destroy(struct rtsp_client *client)
 	pomp_buffer_unref(client->request.buf);
 	pomp_buffer_unref(client->response.buf);
 
+	free(client->request.uri);
+	free(client->request.content_base);
 	rtsp_request_header_clear(&client->request.header);
 	rtsp_message_clear(&client->parser_ctx.msg);
 
@@ -1182,6 +1241,8 @@ int rtsp_client_disconnect(struct rtsp_client *client)
 
 
 int rtsp_client_options(struct rtsp_client *client,
+			const struct rtsp_header_ext *ext,
+			size_t ext_count,
 			void *req_userdata,
 			unsigned int timeout_ms)
 {
@@ -1197,11 +1258,15 @@ int rtsp_client_options(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_OPTIONS;
 	client->request.header.uri = xstrdup("*");
 	client->request.header.cseq = client->cseq;
 	client->request.header.user_agent = xstrdup(client->software_name);
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -1216,6 +1281,8 @@ int rtsp_client_options(struct rtsp_client *client,
 
 int rtsp_client_describe(struct rtsp_client *client,
 			 const char *path,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *req_userdata,
 			 unsigned int timeout_ms)
 {
@@ -1235,12 +1302,16 @@ int rtsp_client_describe(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_DESCRIBE;
 	client->request.header.uri = make_uri(client, path);
 	client->request.header.cseq = client->cseq;
 	client->request.header.user_agent = xstrdup(client->software_name);
 	client->request.header.accept = xstrdup(RTSP_CONTENT_TYPE_SDP);
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -1261,6 +1332,8 @@ int rtsp_client_setup(struct rtsp_client *client,
 		      enum rtsp_lower_transport lower_transport,
 		      uint16_t client_stream_port,
 		      uint16_t client_control_port,
+		      const struct rtsp_header_ext *ext,
+		      size_t ext_count,
 		      void *req_userdata,
 		      unsigned int timeout_ms)
 {
@@ -1300,6 +1373,7 @@ int rtsp_client_setup(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_SETUP;
 
 	res = format_request_uri(
@@ -1327,7 +1401,10 @@ int rtsp_client_setup(struct rtsp_client *client,
 	client->request.header.transport[0]->dst_control_port =
 		client_control_port;
 	client->request.header.session_id = xstrdup(session_id);
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -1344,6 +1421,8 @@ int rtsp_client_play(struct rtsp_client *client,
 		     const char *session_id,
 		     const struct rtsp_range *range,
 		     float scale,
+		     const struct rtsp_header_ext *ext,
+		     size_t ext_count,
 		     void *req_userdata,
 		     unsigned int timeout_ms)
 {
@@ -1373,6 +1452,7 @@ int rtsp_client_play(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_PLAY;
 	client->request.header.uri = xstrdup(session->content_base);
 	client->request.header.cseq = client->cseq;
@@ -1380,7 +1460,10 @@ int rtsp_client_play(struct rtsp_client *client,
 	client->request.header.session_id = xstrdup(session_id);
 	client->request.header.range = *range;
 	client->request.header.scale = scale;
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -1396,6 +1479,8 @@ int rtsp_client_play(struct rtsp_client *client,
 int rtsp_client_pause(struct rtsp_client *client,
 		      const char *session_id,
 		      const struct rtsp_range *range,
+		      const struct rtsp_header_ext *ext,
+		      size_t ext_count,
 		      void *req_userdata,
 		      unsigned int timeout_ms)
 {
@@ -1424,13 +1509,17 @@ int rtsp_client_pause(struct rtsp_client *client,
 
 	/* Set request header */
 	rtsp_request_header_clear(&client->request.header);
+	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_PAUSE;
 	client->request.header.uri = xstrdup(session->content_base);
 	client->request.header.cseq = client->cseq;
 	client->request.header.user_agent = xstrdup(client->software_name);
 	client->request.header.session_id = xstrdup(session_id);
 	client->request.header.range = *range;
-	client->request.userdata = req_userdata;
+	res = rtsp_request_header_copy_ext(
+		&client->request.header, ext, ext_count);
+	if (res < 0)
+		return res;
 
 	/* Send the request */
 	res = send_request(client, timeout_ms);
@@ -1445,10 +1534,25 @@ int rtsp_client_pause(struct rtsp_client *client,
 
 int rtsp_client_teardown(struct rtsp_client *client,
 			 const char *session_id,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *req_userdata,
 			 unsigned int timeout_ms)
 {
-	return send_teardown(client, session_id, req_userdata, timeout_ms, 0);
+	return send_teardown(client,
+			     session_id,
+			     ext,
+			     ext_count,
+			     req_userdata,
+			     timeout_ms,
+			     0);
+}
+
+int rtsp_client_remove_session(struct rtsp_client *client,
+			       const char *session_id)
+{
+	return rtsp_client_remove_session_internal(
+		client, session_id, RTSP_STATUS_CODE_REQUEST_TIMEOUT, 0);
 }
 
 

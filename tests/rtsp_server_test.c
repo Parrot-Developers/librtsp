@@ -55,6 +55,14 @@ static inline const char *strsignal(int signum)
 #define MEDIA2_PATH "stream=1"
 
 
+static const struct rtsp_header_ext header_ext[] = {
+	{
+		.key = "X-com-parrot-test",
+		.value = "server-test",
+	},
+};
+
+
 static int s_stopping;
 struct pomp_loop *s_loop;
 struct rtsp_server *s_server;
@@ -70,9 +78,17 @@ static void sighandler(int signum)
 }
 
 
+static void socket_cb(int fd, void *userdata)
+{
+	ULOGI("socket_cb called with fd=%d", fd);
+}
+
+
 static void describe_cb(struct rtsp_server *server,
 			const char *server_address,
 			const char *path,
+			const struct rtsp_header_ext *ext,
+			size_t ext_count,
 			void *request_ctx,
 			void *userdata)
 {
@@ -146,7 +162,8 @@ static void describe_cb(struct rtsp_server *server,
 	}
 
 out:
-	err = rtsp_server_reply_to_describe(server, request_ctx, ret, sdp);
+	err = rtsp_server_reply_to_describe(
+		server, request_ctx, ret, header_ext, 1, sdp);
 	if (err < 0)
 		ULOG_ERRNO("rtsp_server_reply_to_describe", -err);
 	if (session)
@@ -158,6 +175,8 @@ out:
 static void setup_cb(struct rtsp_server *server,
 		     const char *path,
 		     const char *session_id,
+		     const struct rtsp_header_ext *ext,
+		     size_t ext_count,
 		     void *request_ctx,
 		     void *media_ctx,
 		     enum rtsp_delivery delivery,
@@ -229,6 +248,8 @@ out:
 					 5005,
 					 1,
 					 ssrc32,
+					 header_ext,
+					 1,
 					 (void *)((intptr_t)ssrc32));
 	if (err < 0)
 		ULOG_ERRNO("rtsp_server_reply_to_setup", -err);
@@ -237,6 +258,8 @@ out:
 
 static void play_cb(struct rtsp_server *server,
 		    const char *session_id,
+		    const struct rtsp_header_ext *ext,
+		    size_t ext_count,
 		    void *request_ctx,
 		    void *media_ctx,
 		    const struct rtsp_range *range,
@@ -297,7 +320,9 @@ out:
 					1,
 					seq16,
 					1,
-					time32);
+					time32,
+					header_ext,
+					1);
 	if (err < 0)
 		ULOG_ERRNO("rtsp_server_reply_to_play", -err);
 }
@@ -305,6 +330,8 @@ out:
 
 static void pause_cb(struct rtsp_server *server,
 		     const char *session_id,
+		     const struct rtsp_header_ext *ext,
+		     size_t ext_count,
 		     void *request_ctx,
 		     void *media_ctx,
 		     const struct rtsp_range *range,
@@ -334,7 +361,7 @@ static void pause_cb(struct rtsp_server *server,
 
 out:
 	err = rtsp_server_reply_to_pause(
-		server, request_ctx, media_ctx, ret, &_range);
+		server, request_ctx, media_ctx, ret, &_range, header_ext, 1);
 	if (err < 0)
 		ULOG_ERRNO("rtsp_server_reply_to_pause", -err);
 }
@@ -343,6 +370,8 @@ out:
 static void teardown_cb(struct rtsp_server *server,
 			const char *session_id,
 			enum rtsp_server_teardown_reason reason,
+			const struct rtsp_header_ext *ext,
+			size_t ext_count,
 			void *request_ctx,
 			void *media_ctx,
 			void *stream_userdata,
@@ -364,7 +393,7 @@ static void teardown_cb(struct rtsp_server *server,
 out:
 	if (request_ctx != NULL) {
 		err = rtsp_server_reply_to_teardown(
-			server, request_ctx, media_ctx, ret);
+			server, request_ctx, media_ctx, ret, header_ext, 1);
 		if (err < 0)
 			ULOG_ERRNO("rtsp_server_reply_to_teardown", -err);
 	}
@@ -382,6 +411,7 @@ static void request_timeout_cb(struct rtsp_server *server,
 
 
 static const struct rtsp_server_cbs cbs = {
+	.socket_cb = &socket_cb,
 	.describe = &describe_cb,
 	.setup = &setup_cb,
 	.play = &play_cb,

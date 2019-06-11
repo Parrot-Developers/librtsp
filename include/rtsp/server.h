@@ -52,12 +52,16 @@ struct rtsp_server_cbs {
 	void (*describe)(struct rtsp_server *server,
 			 const char *server_address,
 			 const char *path,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *request_ctx,
 			 void *userdata);
 
 	void (*setup)(struct rtsp_server *server,
 		      const char *path,
 		      const char *session_id,
+		      const struct rtsp_header_ext *ext,
+		      size_t ext_count,
 		      void *request_ctx,
 		      void *media_ctx,
 		      enum rtsp_delivery delivery,
@@ -70,6 +74,8 @@ struct rtsp_server_cbs {
 
 	void (*play)(struct rtsp_server *server,
 		     const char *session_id,
+		     const struct rtsp_header_ext *ext,
+		     size_t ext_count,
 		     void *request_ctx,
 		     void *media_ctx,
 		     const struct rtsp_range *range,
@@ -79,6 +85,8 @@ struct rtsp_server_cbs {
 
 	void (*pause)(struct rtsp_server *server,
 		      const char *session_id,
+		      const struct rtsp_header_ext *ext,
+		      size_t ext_count,
 		      void *request_ctx,
 		      void *media_ctx,
 		      const struct rtsp_range *range,
@@ -88,6 +96,8 @@ struct rtsp_server_cbs {
 	void (*teardown)(struct rtsp_server *server,
 			 const char *session_id,
 			 enum rtsp_server_teardown_reason reason,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *request_ctx,
 			 void *media_ctx,
 			 void *stream_userdata,
@@ -117,6 +127,8 @@ RTSP_API int rtsp_server_destroy(struct rtsp_server *server);
 RTSP_API int rtsp_server_reply_to_describe(struct rtsp_server *server,
 					   void *request_ctx,
 					   int status,
+					   const struct rtsp_header_ext *ext,
+					   size_t ext_count,
 					   char *session_description);
 
 
@@ -128,6 +140,8 @@ RTSP_API int rtsp_server_reply_to_setup(struct rtsp_server *server,
 					uint16_t src_control_port,
 					int ssrc_valid,
 					uint32_t ssrc,
+					const struct rtsp_header_ext *ext,
+					size_t ext_count,
 					void *stream_userdata);
 
 
@@ -140,29 +154,40 @@ RTSP_API int rtsp_server_reply_to_play(struct rtsp_server *server,
 				       int seq_valid,
 				       uint16_t seq,
 				       int rtptime_valid,
-				       uint32_t rtptime);
+				       uint32_t rtptime,
+				       const struct rtsp_header_ext *ext,
+				       size_t ext_count);
 
 
 RTSP_API int rtsp_server_reply_to_pause(struct rtsp_server *server,
 					void *request_ctx,
 					void *media_ctx,
 					int status,
-					struct rtsp_range *range);
+					struct rtsp_range *range,
+					const struct rtsp_header_ext *ext,
+					size_t ext_count);
 
 
 RTSP_API int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 					   void *request_ctx,
 					   void *media_ctx,
-					   int status);
+					   int status,
+					   const struct rtsp_header_ext *ext,
+					   size_t ext_count);
 
 
 RTSP_API int rtsp_server_announce(struct rtsp_server *server,
 				  char *uri,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count,
 				  char *session_description);
 
 
-RTSP_API int rtsp_server_force_session_teardown(struct rtsp_server *server,
-						const char *session_id);
+RTSP_API int
+rtsp_server_force_session_teardown(struct rtsp_server *server,
+				   const char *session_id,
+				   const struct rtsp_header_ext *ext,
+				   size_t ext_count);
 
 
 RTSP_API const char *

@@ -81,6 +81,8 @@ struct rtsp_client_cbs {
 			     enum rtsp_client_req_status req_status,
 			     int status,
 			     uint32_t methods,
+			     const struct rtsp_header_ext *ext,
+			     size_t ext_count,
 			     void *userdata,
 			     void *req_userdata);
 
@@ -88,6 +90,8 @@ struct rtsp_client_cbs {
 			      enum rtsp_client_req_status req_status,
 			      int status,
 			      const char *content_base,
+			      const struct rtsp_header_ext *ext,
+			      size_t ext_count,
 			      const char *sdp,
 			      void *userdata,
 			      void *req_userdata);
@@ -100,6 +104,8 @@ struct rtsp_client_cbs {
 			   uint16_t src_control_port,
 			   int ssrc_valid,
 			   uint32_t ssrc,
+			   const struct rtsp_header_ext *ext,
+			   size_t ext_count,
 			   void *userdata,
 			   void *req_userdata);
 
@@ -113,6 +119,8 @@ struct rtsp_client_cbs {
 			  uint16_t seq,
 			  int rtptime_valid,
 			  uint32_t rtptime,
+			  const struct rtsp_header_ext *ext,
+			  size_t ext_count,
 			  void *userdata,
 			  void *req_userdata);
 
@@ -121,6 +129,8 @@ struct rtsp_client_cbs {
 			   enum rtsp_client_req_status req_status,
 			   int status,
 			   const struct rtsp_range *range,
+			   const struct rtsp_header_ext *ext,
+			   size_t ext_count,
 			   void *userdata,
 			   void *req_userdata);
 
@@ -128,11 +138,15 @@ struct rtsp_client_cbs {
 			      const char *session_id,
 			      enum rtsp_client_req_status req_status,
 			      int status,
+			      const struct rtsp_header_ext *ext,
+			      size_t ext_count,
 			      void *userdata,
 			      void *req_userdata);
 
 	void (*announce)(struct rtsp_client *client,
 			 const char *content_base,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 const char *sdp,
 			 void *userdata);
 };
@@ -155,12 +169,16 @@ RTSP_API int rtsp_client_disconnect(struct rtsp_client *client);
 
 
 RTSP_API int rtsp_client_options(struct rtsp_client *client,
+				 const struct rtsp_header_ext *ext,
+				 size_t ext_count,
 				 void *req_userdata,
 				 unsigned int timeout_ms);
 
 
 RTSP_API int rtsp_client_describe(struct rtsp_client *client,
 				  const char *path,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count,
 				  void *req_userdata,
 				  unsigned int timeout_ms);
 
@@ -173,6 +191,8 @@ RTSP_API int rtsp_client_setup(struct rtsp_client *client,
 			       enum rtsp_lower_transport lower_transport,
 			       uint16_t dst_stream_port,
 			       uint16_t dst_control_port,
+			       const struct rtsp_header_ext *ext,
+			       size_t ext_count,
 			       void *req_userdata,
 			       unsigned int timeout_ms);
 
@@ -181,6 +201,8 @@ RTSP_API int rtsp_client_play(struct rtsp_client *client,
 			      const char *session_id,
 			      const struct rtsp_range *range,
 			      float scale,
+			      const struct rtsp_header_ext *ext,
+			      size_t ext_count,
 			      void *req_userdata,
 			      unsigned int timeout_ms);
 
@@ -188,14 +210,22 @@ RTSP_API int rtsp_client_play(struct rtsp_client *client,
 RTSP_API int rtsp_client_pause(struct rtsp_client *client,
 			       const char *session_id,
 			       const struct rtsp_range *range,
+			       const struct rtsp_header_ext *ext,
+			       size_t ext_count,
 			       void *req_userdata,
 			       unsigned int timeout_ms);
 
 
 RTSP_API int rtsp_client_teardown(struct rtsp_client *client,
 				  const char *session_id,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count,
 				  void *req_userdata,
 				  unsigned int timeout_ms);
+
+
+RTSP_API int rtsp_client_remove_session(struct rtsp_client *client,
+					const char *session_id);
 
 
 RTSP_API int rtsp_client_cancel(struct rtsp_client *client);

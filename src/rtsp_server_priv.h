@@ -49,6 +49,7 @@ struct rtsp_server_session_media {
 struct rtsp_server_session {
 	struct rtsp_server *server;
 	char *session_id;
+	char *uri;
 	unsigned int timeout_ms;
 	struct pomp_timer *timer;
 	int playing;
@@ -123,7 +124,8 @@ struct rtsp_server {
 
 
 struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
-						    unsigned int timeout_ms);
+						    unsigned int timeout_ms,
+						    const char *uri);
 
 
 int rtsp_server_session_remove(struct rtsp_server *server,

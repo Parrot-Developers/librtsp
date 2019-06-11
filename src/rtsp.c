@@ -1728,6 +1728,12 @@ int rtsp_request_header_clear(struct rtsp_request_header *header)
 	xfree((void **)&header->server);
 	xfree((void **)&header->accept);
 
+	for (i = 0; i < header->ext_count; i++) {
+		xfree((void **)&header->ext[i].key);
+		xfree((void **)&header->ext[i].value);
+	}
+	free(header->ext);
+
 	memset(header, 0, sizeof(*header));
 
 	return 0;
@@ -1767,6 +1773,39 @@ int rtsp_request_header_copy(const struct rtsp_request_header *src,
 	dst->accept = xstrdup(src->accept);
 	dst->range = src->range;
 	dst->content_length = src->content_length;
+	int ret = rtsp_request_header_copy_ext(dst, src->ext, src->ext_count);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+
+/**
+ * RTSP Request
+ * see RFC 2326 chapter 6
+ */
+int rtsp_request_header_copy_ext(struct rtsp_request_header *header,
+				 const struct rtsp_header_ext *ext,
+				 size_t ext_count)
+{
+	unsigned int i;
+
+	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
+
+	if (ext_count == 0)
+		return 0;
+
+	ULOG_ERRNO_RETURN_ERR_IF(ext == NULL, EINVAL);
+
+	header->ext = calloc(ext_count, sizeof(struct rtsp_header_ext));
+	if (header->ext == NULL)
+		return -ENOMEM;
+	header->ext_count = ext_count;
+	for (i = 0; i < ext_count; i++) {
+		header->ext[i].key = xstrdup(ext[i].key);
+		header->ext[i].value = xstrdup(ext[i].value);
+	}
 
 	return 0;
 }
@@ -1914,6 +1953,17 @@ int rtsp_request_header_write(const struct rtsp_request_header *header,
 			   header->content_length);
 	}
 
+	/* Header extensions */
+	for (size_t i = 0; i < header->ext_count; i++) {
+		CHECK_FUNC(rtsp_sprintf,
+			   ret,
+			   return ret,
+			   str,
+			   "%s: %s" RTSP_CRLF,
+			   header->ext[i].key,
+			   header->ext[i].value);
+	}
+
 	CHECK_FUNC(rtsp_sprintf, ret, return ret, str, RTSP_CRLF);
 
 	return ret;
@@ -2055,6 +2105,7 @@ int rtsp_request_header_read(char *str,
 					   RTSP_HEADER_USER_AGENT,
 					   strlen(RTSP_HEADER_USER_AGENT))) {
 				/* 'User-Agent' */
+				free(header->user_agent);
 				header->user_agent = strdup(value);
 
 			} else if (!strncasecmp(field,
@@ -2085,6 +2136,23 @@ int rtsp_request_header_read(char *str,
 					strlen(RTSP_HEADER_CONTENT_LENGTH))) {
 				/* 'Content-Length' */
 				header->content_length = atoi(value);
+
+			} else if (!strncasecmp(field,
+						RTSP_HEADER_EXT,
+						strlen(RTSP_HEADER_EXT))) {
+				/* 'X-*' header extension */
+				struct rtsp_header_ext *tmp = realloc(
+					header->ext,
+					(header->ext_count + 1) *
+						sizeof(struct rtsp_header_ext));
+				if (tmp == NULL)
+					return -ENOMEM;
+				header->ext = tmp;
+				header->ext[header->ext_count].key =
+					strdup(field);
+				header->ext[header->ext_count].value =
+					strdup(value);
+				header->ext_count += 1;
 			}
 		}
 
@@ -2116,6 +2184,12 @@ int rtsp_response_header_clear(struct rtsp_response_header *header)
 	xfree((void **)&header->content_language);
 	xfree((void **)&header->content_base);
 	xfree((void **)&header->content_location);
+
+	for (i = 0; i < header->ext_count; i++) {
+		xfree((void **)&header->ext[i].key);
+		xfree((void **)&header->ext[i].value);
+	}
+	free(header->ext);
 
 	memset(header, 0, sizeof(*header));
 
@@ -2169,6 +2243,39 @@ int rtsp_response_header_copy(const struct rtsp_response_header *src,
 	dst->content_language = xstrdup(src->content_language);
 	dst->content_base = xstrdup(src->content_base);
 	dst->content_location = xstrdup(src->content_location);
+	int ret = rtsp_response_header_copy_ext(dst, src->ext, src->ext_count);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+
+/**
+ * RTSP Response
+ * see RFC 2326 chapter 7
+ */
+int rtsp_response_header_copy_ext(struct rtsp_response_header *header,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count)
+{
+	unsigned int i;
+
+	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
+
+	if (ext_count == 0)
+		return 0;
+
+	ULOG_ERRNO_RETURN_ERR_IF(ext == NULL, EINVAL);
+
+	header->ext = calloc(ext_count, sizeof(struct rtsp_header_ext));
+	if (header->ext == NULL)
+		return -ENOMEM;
+	header->ext_count = ext_count;
+	for (i = 0; i < ext_count; i++) {
+		header->ext[i].key = xstrdup(ext[i].key);
+		header->ext[i].value = xstrdup(ext[i].value);
+	}
 
 	return 0;
 }
@@ -2353,6 +2460,17 @@ int rtsp_response_header_write(const struct rtsp_response_header *header,
 			   str,
 			   RTSP_HEADER_CONTENT_LOCATION ": %s" RTSP_CRLF,
 			   header->content_location);
+	}
+
+	/* Header extensions */
+	for (size_t i = 0; i < header->ext_count; i++) {
+		CHECK_FUNC(rtsp_sprintf,
+			   ret,
+			   return ret,
+			   str,
+			   "%s: %s" RTSP_CRLF,
+			   header->ext[i].key,
+			   header->ext[i].value);
 	}
 
 	CHECK_FUNC(rtsp_sprintf, ret, return ret, str, RTSP_CRLF);
@@ -2569,6 +2687,23 @@ int rtsp_response_header_read(char *msg,
 					strlen(RTSP_HEADER_CONTENT_LOCATION))) {
 				/* 'Content-Location' */
 				header->content_location = strdup(value);
+
+			} else if (!strncasecmp(field,
+						RTSP_HEADER_EXT,
+						strlen(RTSP_HEADER_EXT))) {
+				/* 'X-*' header extension */
+				struct rtsp_header_ext *tmp = realloc(
+					header->ext,
+					(header->ext_count + 1) *
+						sizeof(struct rtsp_header_ext));
+				if (tmp == NULL)
+					return -ENOMEM;
+				header->ext = tmp;
+				header->ext[header->ext_count].key =
+					strdup(field);
+				header->ext[header->ext_count].value =
+					strdup(value);
+				header->ext_count += 1;
 			}
 		}
 

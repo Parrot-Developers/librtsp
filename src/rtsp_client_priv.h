@@ -58,7 +58,7 @@ struct rtsp_client_session {
 	struct pomp_timer *timer;
 	struct rtsp_client *client;
 	char *content_base;
-	unsigned int timeout;
+	unsigned int timeout_ms;
 	unsigned int failed_keep_alive;
 	int keep_alive_in_progress;
 	int internal_teardown;
@@ -105,10 +105,10 @@ struct rtsp_client_session *rtsp_client_get_session(struct rtsp_client *client,
 						    int add);
 
 
-int rtsp_client_remove_session(struct rtsp_client *client,
-			       const char *session_id,
-			       int status_code,
-			       int nexist_ok);
+int rtsp_client_remove_session_internal(struct rtsp_client *client,
+					const char *session_id,
+					int status_code,
+					int nexist_ok);
 
 
 void rtsp_client_remove_all_sessions(struct rtsp_client *client);

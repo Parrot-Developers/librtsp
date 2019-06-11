@@ -49,6 +49,14 @@ static inline const char *strsignal(int signum)
 #endif /* _WIN32 */
 
 
+static const struct rtsp_header_ext header_ext[] = {
+	{
+		.key = "X-com-parrot-test",
+		.value = "client-test",
+	},
+};
+
+
 struct app {
 	struct pomp_loop *loop;
 	struct pomp_timer *timer;
@@ -82,8 +90,11 @@ static void options_req(struct app *app)
 
 	ULOGI("request options");
 
-	res = rtsp_client_options(
-		app->client, NULL, RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
+	res = rtsp_client_options(app->client,
+				  header_ext,
+				  1,
+				  NULL,
+				  RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
 		ULOG_ERRNO("rtsp_client_options", -res);
 }
@@ -97,6 +108,8 @@ static void describe_req(struct app *app)
 
 	res = rtsp_client_describe(app->client,
 				   app->path,
+				   header_ext,
+				   1,
 				   NULL,
 				   RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
@@ -138,6 +151,8 @@ setup_req(struct app *app, const char *content_base, struct sdp_media *media)
 				RTSP_LOWER_TRANSPORT_UDP,
 				55004,
 				55005,
+				header_ext,
+				1,
 				NULL,
 				RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
@@ -162,6 +177,8 @@ static void play_req(struct app *app)
 			       app->session_id,
 			       &range,
 			       1.0,
+			       header_ext,
+			       1,
 			       NULL,
 			       RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
@@ -183,6 +200,8 @@ static void pause_req(struct app *app)
 	res = rtsp_client_pause(app->client,
 				app->session_id,
 				&range,
+				header_ext,
+				1,
 				NULL,
 				RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
@@ -198,6 +217,8 @@ static void teardown_req(struct app *app)
 
 	res = rtsp_client_teardown(app->client,
 				   app->session_id,
+				   header_ext,
+				   1,
 				   NULL,
 				   RTSP_CLIENT_DEFAULT_RESP_TIMEOUT_MS);
 	if (res < 0)
@@ -236,6 +257,8 @@ static void options_resp_cb(struct rtsp_client *client,
 			    enum rtsp_client_req_status req_status,
 			    int status,
 			    uint32_t methods,
+			    const struct rtsp_header_ext *ext,
+			    size_t ext_count,
 			    void *userdata,
 			    void *req_userdata)
 {
@@ -265,6 +288,8 @@ static void describe_resp_cb(struct rtsp_client *client,
 			     enum rtsp_client_req_status req_status,
 			     int status,
 			     const char *content_base,
+			     const struct rtsp_header_ext *ext,
+			     size_t ext_count,
 			     const char *sdp,
 			     void *userdata,
 			     void *req_userdata)
@@ -327,6 +352,8 @@ static void setup_resp_cb(struct rtsp_client *client,
 			  uint16_t src_control_port,
 			  int ssrc_valid,
 			  uint32_t ssrc,
+			  const struct rtsp_header_ext *ext,
+			  size_t ext_count,
 			  void *userdata,
 			  void *req_userdata)
 {
@@ -375,6 +402,8 @@ static void play_resp_cb(struct rtsp_client *client,
 			 uint16_t seq,
 			 int rtptime_valid,
 			 uint32_t rtptime,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
 			 void *userdata,
 			 void *req_userdata)
 {
@@ -411,6 +440,8 @@ static void pause_resp_cb(struct rtsp_client *client,
 			  enum rtsp_client_req_status req_status,
 			  int status,
 			  const struct rtsp_range *range,
+			  const struct rtsp_header_ext *ext,
+			  size_t ext_count,
 			  void *userdata,
 			  void *req_userdata)
 {
@@ -440,6 +471,8 @@ static void teardown_resp_cb(struct rtsp_client *client,
 			     const char *session_id,
 			     enum rtsp_client_req_status req_status,
 			     int status,
+			     const struct rtsp_header_ext *ext,
+			     size_t ext_count,
 			     void *userdata,
 			     void *req_userdata)
 {
@@ -470,6 +503,8 @@ static void teardown_resp_cb(struct rtsp_client *client,
 
 static void announce_cb(struct rtsp_client *client,
 			const char *path,
+			const struct rtsp_header_ext *ext,
+			size_t ext_count,
 			const char *sdp,
 			void *userdata)
 {

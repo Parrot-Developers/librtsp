@@ -145,6 +145,18 @@ struct rtsp_range {
 };
 
 
+/**
+ * RTSP header extensions
+ */
+
+struct rtsp_header_ext {
+	const char *key;
+	const char *value;
+};
+
+#define RTSP_HEADER_EXT_PARROT_PROXY_SESSION "X-com-parrot-proxy-session"
+
+
 RTSP_API const char *rtsp_method_type_str(enum rtsp_method_type val);
 
 

@@ -26,6 +26,15 @@ include $(BUILD_LIBRARY)
 
 
 include $(CLEAR_VARS)
+
+LOCAL_MODULE := librtsp-internal
+LOCAL_DESCRIPTION := Real Time Streaming Protocol library internal headers
+LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/src/internal/
+
+include $(BUILD_CUSTOM)
+
+
+include $(CLEAR_VARS)
 LOCAL_MODULE := rtsp-server-test
 LOCAL_CATEGORY_PATH := multimedia
 LOCAL_DESCRIPTION := Real Time Streaming Protocol library server test program
