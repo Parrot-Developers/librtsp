@@ -1794,7 +1794,7 @@ int rtsp_request_header_write(const struct rtsp_request_header *header,
 		   header->uri);
 
 	/* 'CSeq' */
-	if (header->cseq > 0) {
+	if (header->cseq >= 0) {
 		CHECK_FUNC(rtsp_sprintf,
 			   ret,
 			   return ret,
