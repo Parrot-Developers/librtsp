@@ -1190,6 +1190,12 @@ int rtsp_rtp_info_header_read(char *str,
 			key = strtok_r(param, "=", &temp3);
 			val = strtok_r(NULL, "", &temp3);
 
+			if (key == NULL) {
+				ULOGE("Invalid RTSP Header key");
+				rtsp_rtp_info_header_free(&rtpi);
+				ret = -EINVAL;
+				goto exit;
+			}
 			/* 'seq' */
 			if ((strcmp(key, RTSP_RTP_INFO_SEQ) == 0) && (val)) {
 				rtpi->seq = atoi(val);
@@ -1211,6 +1217,7 @@ int rtsp_rtp_info_header_read(char *str,
 		rtpi_str = strtok_r(NULL, ",", &temp);
 	}
 
+exit:
 	*count = _count;
 
 	return ret;
@@ -1794,7 +1801,7 @@ int rtsp_request_header_write(const struct rtsp_request_header *header,
 		   header->uri);
 
 	/* 'CSeq' */
-	if (header->cseq > 0) {
+	if (header->cseq >= 0) {
 		CHECK_FUNC(rtsp_sprintf,
 			   ret,
 			   return ret,
@@ -2192,7 +2199,7 @@ int rtsp_response_header_write(const struct rtsp_response_header *header,
 		   header->status_string);
 
 	/* 'CSeq' */
-	if (header->cseq > 0) {
+	if (header->cseq >= 0) {
 		CHECK_FUNC(rtsp_sprintf,
 			   ret,
 			   return ret,

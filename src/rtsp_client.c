@@ -825,9 +825,8 @@ static int rtsp_client_response_process(struct rtsp_client *client,
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
 
 	/* Note: VLC server doesn't repeat the cseq in error case */
-	if ((msg->header.resp.cseq != 0) &&
-	    (msg->header.resp.cseq != client->request.header.cseq)) {
-		ULOGE("%s: unexpected Cseq (req: %d, resp: %d)",
+	if (msg->header.resp.cseq != client->request.header.cseq) {
+		ULOGE("%s: unexpected CSeq (req: %d, resp: %d)",
 		      __func__,
 		      client->request.header.cseq,
 		      msg->header.resp.cseq);

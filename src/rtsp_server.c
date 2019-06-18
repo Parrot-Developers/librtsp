@@ -456,7 +456,8 @@ static int rtsp_server_setup(struct rtsp_server *server,
 out:
 	request->in_callback = 0;
 	if ((ret == 0) && (request->replied)) {
-		session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+		if (session)
+			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
 	}
 	free(uri);
@@ -524,7 +525,8 @@ static int rtsp_server_play(struct rtsp_server *server,
 out:
 	request->in_callback = 0;
 	if ((ret == 0) && (request->replied)) {
-		session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+		if (session)
+			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
 	}
 	free(uri);
@@ -589,7 +591,8 @@ static int rtsp_server_pause(struct rtsp_server *server,
 out:
 	request->in_callback = 0;
 	if ((ret == 0) && (request->replied)) {
-		session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+		if (session)
+			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
 	}
 	free(uri);
@@ -653,7 +656,8 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 out:
 	request->in_callback = 0;
 	if ((ret == 0) && (request->replied)) {
-		session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+		if (session)
+			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
 		rtsp_server_session_remove(server, session);
 	}
@@ -968,6 +972,7 @@ int rtsp_server_new(const char *software_name,
 
 	server = calloc(1, sizeof(*server));
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, ENOMEM);
+	server->cseq = 1;
 	server->max_msg_size = PIPE_BUF - 1;
 	server->loop = loop;
 	server->cbs = *cbs;
@@ -1281,6 +1286,10 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 	}
 
 	media = media_ctx;
+	if (media->session == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
 	session = media->session;
 	media->userdata = stream_userdata;
 
@@ -1409,7 +1418,9 @@ out:
 	if (request != NULL) {
 		request->replied = 1;
 		if (!request->in_callback) {
-			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+			if (session)
+				session->op_in_progress =
+					RTSP_METHOD_TYPE_UNKNOWN;
 			rtsp_server_pending_request_remove(server, request);
 		}
 	}
@@ -1478,6 +1489,10 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 	}
 
 	media = (struct rtsp_server_session_media *)media_ctx;
+	if (media->session == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
 	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
@@ -1616,7 +1631,9 @@ out:
 	if ((request != NULL) && (replied == (int)request->media_count)) {
 		request->replied = 1;
 		if (!request->in_callback) {
-			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+			if (session)
+				session->op_in_progress =
+					RTSP_METHOD_TYPE_UNKNOWN;
 			rtsp_server_pending_request_remove(server, request);
 		}
 	}
@@ -1680,6 +1697,10 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 	}
 
 	media = (struct rtsp_server_session_media *)media_ctx;
+	if (media->session == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
 	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
@@ -1790,7 +1811,9 @@ out:
 	if ((request != NULL) && (replied == (int)request->media_count)) {
 		request->replied = 1;
 		if (!request->in_callback) {
-			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+			if (session)
+				session->op_in_progress =
+					RTSP_METHOD_TYPE_UNKNOWN;
 			rtsp_server_pending_request_remove(server, request);
 		}
 	}
@@ -1846,6 +1869,10 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 	}
 
 	media = (struct rtsp_server_session_media *)media_ctx;
+	if (media->session == NULL) {
+		ret = -EINVAL;
+		goto out;
+	}
 	session = media->session;
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
@@ -1940,7 +1967,9 @@ out:
 	if ((request != NULL) && (replied == (int)request->media_count)) {
 		request->replied = 1;
 		if (!request->in_callback) {
-			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
+			if (session)
+				session->op_in_progress =
+					RTSP_METHOD_TYPE_UNKNOWN;
 			rtsp_server_pending_request_remove(server, request);
 			rtsp_server_session_remove(server, session);
 		}

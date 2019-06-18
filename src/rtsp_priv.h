@@ -64,7 +64,7 @@
 #define RTSP_HEADER_CONTENT_LENGTH	"Content-Length"
 #define RTSP_HEADER_CONTENT_LOCATION	"Content-Location"	/* opt. */
 #define RTSP_HEADER_CONTENT_TYPE	"Content-Type"
-#define RTSP_HEADER_CSEQ		"Cseq"
+#define RTSP_HEADER_CSEQ		"CSeq"
 #define RTSP_HEADER_DATE		"Date"			/* opt. */
 #define RTSP_HEADER_PROXY_REQUIRE	"Proxy-Require"		/* TODO */
 #define RTSP_HEADER_PUBLIC		"Public"		/* opt. */
