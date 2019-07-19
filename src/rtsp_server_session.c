@@ -35,7 +35,7 @@ struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
 						    unsigned int timeout_ms)
 {
 	int ret;
-	int found = 0;
+	int found;
 	struct rtsp_server_session *session = NULL, *_session = NULL;
 
 	ULOG_ERRNO_RETURN_VAL_IF(server == NULL, EINVAL, NULL);
@@ -74,6 +74,7 @@ struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
 		}
 
 		/* Check that this session id does not already exist */
+		found = 0;
 		list_walk_entry_forward(&server->sessions, _session, node)
 		{
 			if (strncmp(_session->session_id,

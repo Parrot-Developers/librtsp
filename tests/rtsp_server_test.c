@@ -41,6 +41,14 @@ ULOG_DECLARE_TAG(rtsp_server_test);
 #include <libsdp.h>
 #include <rtsp/server.h>
 
+/* Win32 stubs */
+#ifdef _WIN32
+static inline const char *strsignal(int signum)
+{
+	return "??";
+}
+#endif /* _WIN32 */
+
 
 #define RESOURCE_PATH "live"
 #define MEDIA1_PATH "stream=0"

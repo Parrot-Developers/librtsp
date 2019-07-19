@@ -29,21 +29,31 @@
 #define _RTSP_PRIV_H_
 
 #define _GNU_SOURCE
-#include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#	include <winsock2.h>
+#	include <ws2tcpip.h>
+#else /* !_WIN32 */
+#	include <arpa/inet.h>
+#	include <netinet/in.h>
+#	include <netdb.h>
+#endif /* !_WIN32 */
+
 #include <futils/futils.h>
 #include <futils/random.h>
 #include <libpomp.h>
 #include <rtsp/rtsp.h>
 
+#ifdef _WIN32
+#	define PIPE_BUF 4096
+#endif /* _WIN32 */
 
 #define RTSP_DEFAULT_PORT 554
 

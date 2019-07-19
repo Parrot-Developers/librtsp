@@ -40,6 +40,14 @@ ULOG_DECLARE_TAG(rtsp_client_test);
 #include <libsdp.h>
 #include <rtsp/client.h>
 
+/* Win32 stubs */
+#ifdef _WIN32
+static inline const char *strsignal(int signum)
+{
+	return "??";
+}
+#endif /* _WIN32 */
+
 
 struct app {
 	struct pomp_loop *loop;
@@ -579,7 +587,9 @@ int main(int argc, char **argv)
 	/* Setup signal handlers */
 	signal(SIGINT, &sig_handler);
 	signal(SIGTERM, &sig_handler);
+#ifndef _WIN32
 	signal(SIGPIPE, SIG_IGN);
+#endif
 
 	/* Create loop */
 	s_app.loop = pomp_loop_new();
