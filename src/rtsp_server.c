@@ -52,6 +52,20 @@ rtsp_server_teardown_reason_str(enum rtsp_server_teardown_reason val)
 }
 
 
+static void pomp_socket_cb(struct pomp_ctx *ctx,
+			   int fd,
+			   enum pomp_socket_kind kind,
+			   void *userdata)
+{
+	struct rtsp_server *server = userdata;
+
+	ULOG_ERRNO_RETURN_IF(server == NULL, EINVAL);
+
+	if (server->cbs.socket_cb)
+		(*server->cbs.socket_cb)(fd, server->cbs_userdata);
+}
+
+
 static int error_response(struct rtsp_server *server,
 			  struct rtsp_server_pending_request *request,
 			  int status)
@@ -1010,9 +1024,11 @@ int rtsp_server_new(const char *software_name,
 		goto error;
 	}
 
-	if (server->cbs.socket_cb)
-		(*server->cbs.socket_cb)(pomp_ctx_get_fd(server->pomp),
-					 server->cbs_userdata);
+	ret = pomp_ctx_set_socket_cb(server->pomp, &pomp_socket_cb);
+	if (ret < 0) {
+		ULOG_ERRNO("pomp_ctx_set_socket_cb", -ret);
+		goto error;
+	}
 
 	ret = pomp_ctx_set_raw(server->pomp, &rtsp_server_pomp_cb);
 	if (ret < 0) {

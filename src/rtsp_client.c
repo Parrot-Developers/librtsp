@@ -32,6 +32,20 @@
 ULOG_DECLARE_TAG(rtsp_client);
 
 
+static void pomp_socket_cb(struct pomp_ctx *ctx,
+			   int fd,
+			   enum pomp_socket_kind kind,
+			   void *userdata)
+{
+	struct rtsp_client *client = userdata;
+
+	ULOG_ERRNO_RETURN_IF(client == NULL, EINVAL);
+
+	if (client->cbs.socket_cb)
+		(*client->cbs.socket_cb)(fd, client->cbs_userdata);
+}
+
+
 static char *make_uri(struct rtsp_client *client, const char *path)
 {
 	char *tmp;
@@ -980,9 +994,11 @@ int rtsp_client_new(struct pomp_loop *loop,
 		goto error;
 	}
 
-	if (client->cbs.socket_cb)
-		(*client->cbs.socket_cb)(pomp_ctx_get_fd(client->ctx),
-					 client->cbs_userdata);
+	res = pomp_ctx_set_socket_cb(client->ctx, &pomp_socket_cb);
+	if (res < 0) {
+		ULOG_ERRNO("pomp_ctx_set_socket_cb", -res);
+		goto error;
+	}
 
 	res = pomp_ctx_set_raw(client->ctx, &rtsp_client_pomp_raw_cb);
 	if (res < 0) {
