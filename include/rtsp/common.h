@@ -155,6 +155,7 @@ struct rtsp_header_ext {
 };
 
 #define RTSP_HEADER_EXT_PARROT_PROXY_SESSION "X-com-parrot-proxy-session"
+#define RTSP_HEADER_EXT_PARROT_LINK_TYPE "X-com-parrot-link-type"
 
 
 RTSP_API const char *rtsp_method_type_str(enum rtsp_method_type val);

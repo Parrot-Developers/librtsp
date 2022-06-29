@@ -413,6 +413,8 @@ static int request_complete(struct rtsp_client *client,
 	if (!resp_h) {
 		memset(&dummy, 0, sizeof(dummy));
 		dummy.session_id = req_session_id;
+		if (status == RTSP_CLIENT_REQ_STATUS_TIMEOUT)
+			dummy.status_code = RTSP_STATUS_CODE_REQUEST_TIMEOUT;
 		resp_h = &dummy;
 	}
 
