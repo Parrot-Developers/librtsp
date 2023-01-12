@@ -6,7 +6,7 @@ LOCAL_MODULE := librtsp
 LOCAL_CATEGORY_PATH := libs
 LOCAL_DESCRIPTION := Real Time Streaming Protocol library
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/include
-LOCAL_CFLAGS := -DRTSP_API_EXPORTS -fvisibility=hidden -std=gnu99
+LOCAL_CFLAGS := -DRTSP_API_EXPORTS -fvisibility=hidden -std=gnu99 -D_GNU_SOURCE
 LOCAL_SRC_FILES := \
 	src/rtsp.c \
 	src/rtsp_client.c \

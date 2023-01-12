@@ -134,6 +134,23 @@ static char *client_uri_to_content_base(struct rtsp_client *client,
 }
 
 
+static void set_connection_state(struct rtsp_client *client,
+				 enum rtsp_client_conn_state new_state)
+{
+	if (client->conn_state == new_state)
+		return;
+
+	ULOGD("connection_state: %s to %s",
+	      rtsp_client_conn_state_str(client->conn_state),
+	      rtsp_client_conn_state_str(new_state));
+
+	client->conn_state = new_state;
+
+	(*client->cbs.connection_state)(
+		client, client->conn_state, client->cbs_userdata);
+}
+
+
 static int send_request(struct rtsp_client *client, unsigned int timeout_ms)
 {
 	int res = 0;
@@ -186,6 +203,27 @@ static int send_request(struct rtsp_client *client, unsigned int timeout_ms)
 	return 0;
 }
 
+static int clear_pending_keep_alive_timer(struct rtsp_client *client)
+{
+	struct rtsp_client_session *session;
+
+	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
+
+	list_walk_entry_forward(&client->sessions, session, node)
+	{
+		if (!session->keep_alive_in_progress)
+			continue;
+
+		/* Clear the response timeout timer related to
+		 * keep alive */
+		int err = pomp_timer_clear(client->request.timer);
+		if (err < 0)
+			ULOG_ERRNO("pomp_timer_clear", -err);
+		return 1;
+	}
+
+	return 0;
+}
 
 static int reset_keep_alive_timer(struct rtsp_client_session *session,
 				  unsigned int timer_msec)
@@ -221,13 +259,25 @@ static int send_keep_alive(struct rtsp_client *client,
 
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED) {
 		/* If we are still not reconnected when trying to send
-		 * a keep-alive, remove the session */
-		ULOGI("trying to send a keep-alive while not connected, "
-		      "remove the session");
-		res = -EPIPE;
-		rtsp_client_remove_session_internal(
-			client, session->id, res, 0);
-		return res;
+		 * a keep-alive, retry but after several failed attempts,
+		 * remove the session */
+		ULOGI("trying to send a keep-alive while not connected");
+		session->failed_keep_alive++;
+		if (session->failed_keep_alive >=
+		    RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE) {
+			ULOGW("%d failed keep alive attempts, removing session",
+			      session->failed_keep_alive);
+			res = -EPIPE;
+			rtsp_client_remove_session_internal(
+				client, session->id, res, 0);
+			return res;
+		} else {
+			reset_keep_alive_timer(
+				session,
+				session->timeout_ms /
+					RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE);
+			return -EAGAIN;
+		}
 	}
 
 	/* Keep alive already in progress (waiting for reply) */
@@ -284,6 +334,7 @@ static int send_teardown(struct rtsp_client *client,
 			 int internal)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 	struct rtsp_client_session *session;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
@@ -295,7 +346,13 @@ static int send_teardown(struct rtsp_client *client,
 
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	/* If there is a pending request that is not a keep alive, remain in
+	 * busy state */
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* Make sure that we know the session */
@@ -672,6 +729,29 @@ static int request_complete(struct rtsp_client *client,
 		if (err < 0)
 			ULOG_ERRNO("rtsp_client_remove_session_internal", -err);
 	}
+	if (status == RTSP_CLIENT_REQ_STATUS_TIMEOUT) {
+		client->failed_requests++;
+		if (client->failed_requests >=
+		    RTSP_CLIENT_MAX_FAILED_REQUESTS) {
+			ULOGW("%d failed requests (timeout), "
+			      "reconnecting to %s...",
+			      client->failed_requests,
+			      client->addr);
+			err = pomp_ctx_stop(client->ctx);
+			if (err < 0)
+				ULOG_ERRNO("pomp_ctx_stop", -err);
+			set_connection_state(client,
+					     RTSP_CLIENT_CONN_STATE_CONNECTING);
+			err = pomp_ctx_connect(client->ctx,
+					       (const struct sockaddr *)&client
+						       ->remote_addr_in,
+					       sizeof(client->remote_addr_in));
+			if (err < 0)
+				ULOG_ERRNO("pomp_ctx_connect", -err);
+		}
+	} else {
+		client->failed_requests = 0;
+	}
 
 exit:
 	free(req_session_id);
@@ -695,14 +775,8 @@ static void rtsp_client_pomp_event_cb(struct pomp_ctx *ctx,
 	switch (event) {
 	case POMP_EVENT_CONNECTED:
 		ULOGI("client connected");
-		client->conn_state = RTSP_CLIENT_CONN_STATE_CONNECTED;
-		if (client->user_connecting) {
-			/* Connection initiated by the user */
-			client->user_connecting = 0;
-			(*client->cbs.connection_state)(client,
-							client->conn_state,
-							client->cbs_userdata);
-		}
+		set_connection_state(client, RTSP_CLIENT_CONN_STATE_CONNECTED);
+
 		/* If a session already exists, send a keep-alive
 		 * right away; this allows quickly seeing if a
 		 * session timeout has occurred on the server side
@@ -723,8 +797,6 @@ static void rtsp_client_pomp_event_cb(struct pomp_ctx *ctx,
 		    RTSP_CLIENT_CONN_STATE_DISCONNECTING) {
 			/* Disconnetion initiated by the user */
 			ULOGI("client disconnected");
-			client->conn_state =
-				RTSP_CLIENT_CONN_STATE_DISCONNECTED;
 
 			xfree((void **)&client->addr);
 			res = request_complete(client,
@@ -735,15 +807,13 @@ static void rtsp_client_pomp_event_cb(struct pomp_ctx *ctx,
 			if (res < 0)
 				ULOG_ERRNO("request_complete", -res);
 
-			(*client->cbs.connection_state)(client,
-							client->conn_state,
-							client->cbs_userdata);
+			set_connection_state(
+				client, RTSP_CLIENT_CONN_STATE_DISCONNECTED);
 		} else if (client->conn_state ==
 			   RTSP_CLIENT_CONN_STATE_CONNECTED) {
 			/* Disconnetion by the network, auto reconnect*/
 			ULOGI("client disconnected, waiting for reconnection");
-			client->conn_state = RTSP_CLIENT_CONN_STATE_CONNECTING;
-			client->user_connecting = 0;
+
 			res = request_complete(client,
 					       NULL,
 					       NULL,
@@ -751,6 +821,9 @@ static void rtsp_client_pomp_event_cb(struct pomp_ctx *ctx,
 					       RTSP_CLIENT_REQ_STATUS_ABORTED);
 			if (res < 0)
 				ULOG_ERRNO("request_complete", -res);
+
+			set_connection_state(client,
+					     RTSP_CLIENT_CONN_STATE_CONNECTING);
 		}
 
 		break;
@@ -894,11 +967,38 @@ out:
 static int rtsp_client_response_process(struct rtsp_client *client,
 					struct rtsp_message *msg)
 {
+	struct rtsp_client_session *session;
+
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
 
 	/* Note: VLC server doesn't repeat the cseq in error case */
 	if (msg->header.resp.cseq != client->request.header.cseq) {
+
+		list_walk_entry_forward(&client->sessions, session, node)
+		{
+			if (!session->keep_alive_in_progress)
+				continue;
+
+			/* We suppose that this is in fact the response to a
+			 * pending keep alive; drop the response */
+			session->keep_alive_in_progress = 0;
+			ULOGW("%s: dropping RTSP response cseq=%d session=%s"
+			      " (probably %s)",
+			      __func__,
+			      msg->header.resp.cseq,
+			      session->id,
+			      rtsp_method_type_str(
+				      RTSP_METHOD_TYPE_GET_PARAMETER));
+
+			/* Try to send a keep alive later as this one has been
+			 * dropped. Moreover the following response may not
+			 * be related to this session. */
+			reset_keep_alive_timer(session,
+					       session->timeout_ms / 2);
+			return 0;
+		}
+
 		ULOGE("%s: unexpected CSeq (req: %d, resp: %d)",
 		      __func__,
 		      client->request.header.cseq,
@@ -1101,6 +1201,13 @@ int rtsp_client_destroy(struct rtsp_client *client)
 	if (err < 0)
 		ULOG_ERRNO("pomp_timer_destroy", -err);
 
+	/* Before removing any session, the pomp context must be stopped
+	 * to trigger a POMP_EVENT_DISCONNECTED event and complete any
+	 * pending request with a RTSP_CLIENT_REQ_STATUS_ABORTED status */
+	err = pomp_ctx_stop(client->ctx);
+	if (err < 0)
+		ULOG_ERRNO("pomp_ctx_stop", -err);
+
 	rtsp_client_remove_all_sessions(client);
 
 	err = pomp_ctx_destroy(client->ctx);
@@ -1129,7 +1236,6 @@ int rtsp_client_connect(struct rtsp_client *client, const char *addr)
 	char *url_tmp = NULL;
 	char *server_addr = NULL;
 	uint16_t server_port = RTSP_DEFAULT_PORT;
-	struct sockaddr_in remote_addr_in;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(addr == NULL, EINVAL);
@@ -1171,22 +1277,21 @@ int rtsp_client_connect(struct rtsp_client *client, const char *addr)
 	}
 
 	/* Set address */
-	res = inet_pton(AF_INET, server_addr, &remote_addr_in.sin_addr);
+	res = inet_pton(AF_INET, server_addr, &client->remote_addr_in.sin_addr);
 	if (res <= 0) {
 		res = -errno;
 		ULOG_ERRNO("inet_pton('%s')", -res, server_addr);
 		goto error;
 	}
-	remote_addr_in.sin_family = AF_INET;
-	remote_addr_in.sin_port = htons(server_port);
+	client->remote_addr_in.sin_family = AF_INET;
+	client->remote_addr_in.sin_port = htons(server_port);
 
 	ULOGI("connecting to address %s port %d", server_addr, server_port);
-	client->conn_state = RTSP_CLIENT_CONN_STATE_CONNECTING;
-	client->user_connecting = 1;
+	set_connection_state(client, RTSP_CLIENT_CONN_STATE_CONNECTING);
 
 	res = pomp_ctx_connect(client->ctx,
-			       (const struct sockaddr *)&remote_addr_in,
-			       sizeof(remote_addr_in));
+			       (const struct sockaddr *)&client->remote_addr_in,
+			       sizeof(client->remote_addr_in));
 	if (res < 0) {
 		ULOG_ERRNO("pomp_ctx_connect", -res);
 		goto error;
@@ -1196,8 +1301,7 @@ int rtsp_client_connect(struct rtsp_client *client, const char *addr)
 	return 0;
 
 error:
-	client->conn_state = RTSP_CLIENT_CONN_STATE_DISCONNECTED;
-	client->user_connecting = 0;
+	set_connection_state(client, RTSP_CLIENT_CONN_STATE_DISCONNECTED);
 	xfree((void **)&client->addr);
 	free(url_tmp);
 	return res;
@@ -1218,10 +1322,11 @@ int rtsp_client_disconnect(struct rtsp_client *client)
 	if (client->conn_state == RTSP_CLIENT_CONN_STATE_CONNECTING)
 		already_disconnected = 1;
 
-	client->conn_state = RTSP_CLIENT_CONN_STATE_DISCONNECTING;
+	set_connection_state(client, RTSP_CLIENT_CONN_STATE_DISCONNECTING);
 
-	rtsp_client_remove_all_sessions(client);
-
+	/* Before removing any session, the pomp context must be stopped
+	 * to trigger a POMP_EVENT_DISCONNECTED event and complete any
+	 * pending request with a RTSP_CLIENT_REQ_STATUS_ABORTED status */
 	res = pomp_ctx_stop(client->ctx);
 	if (res < 0) {
 		ULOG_ERRNO("pomp_ctx_stop", -res);
@@ -1230,13 +1335,14 @@ int rtsp_client_disconnect(struct rtsp_client *client)
 
 	if (already_disconnected) {
 		ULOGI("client disconnected (already disconnected)");
-		client->conn_state = RTSP_CLIENT_CONN_STATE_DISCONNECTED;
 		xfree((void **)&client->addr);
 		request_complete(
 			client, NULL, NULL, 0, RTSP_CLIENT_REQ_STATUS_ABORTED);
-		(*client->cbs.connection_state)(
-			client, client->conn_state, client->cbs_userdata);
+		set_connection_state(client,
+				     RTSP_CLIENT_CONN_STATE_DISCONNECTED);
 	}
+
+	rtsp_client_remove_all_sessions(client);
 
 	return 0;
 }
@@ -1249,13 +1355,18 @@ int rtsp_client_options(struct rtsp_client *client,
 			unsigned int timeout_ms)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
 
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* Set request header */
@@ -1289,6 +1400,7 @@ int rtsp_client_describe(struct rtsp_client *client,
 			 unsigned int timeout_ms)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(
@@ -1299,7 +1411,11 @@ int rtsp_client_describe(struct rtsp_client *client,
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
 
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* Set request header */
@@ -1340,6 +1456,7 @@ int rtsp_client_setup(struct rtsp_client *client,
 		      unsigned int timeout_ms)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 	struct rtsp_transport_header *th;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
@@ -1355,7 +1472,13 @@ int rtsp_client_setup(struct rtsp_client *client,
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
 
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	/* If there is a pending request that is not a keep alive, remain in
+	 * busy state */
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* If a session id is passed, make sure that we know the session,
@@ -1429,6 +1552,7 @@ int rtsp_client_play(struct rtsp_client *client,
 		     unsigned int timeout_ms)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 	struct rtsp_client_session *session;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
@@ -1442,7 +1566,13 @@ int rtsp_client_play(struct rtsp_client *client,
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
 
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	/* If there is a pending request that is not a keep alive, remain in
+	 * busy state */
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* Make sure that we know the session */
@@ -1487,6 +1617,7 @@ int rtsp_client_pause(struct rtsp_client *client,
 		      unsigned int timeout_ms)
 {
 	int res = 0;
+	int keep_alive_in_progress = 0;
 	struct rtsp_client_session *session;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
@@ -1499,7 +1630,13 @@ int rtsp_client_pause(struct rtsp_client *client,
 
 	if (client->conn_state != RTSP_CLIENT_CONN_STATE_CONNECTED)
 		return -EPIPE;
-	if (client->request.is_pending)
+	keep_alive_in_progress = clear_pending_keep_alive_timer(client);
+	if (keep_alive_in_progress < 0)
+		return keep_alive_in_progress;
+
+	/* If there is a pending request that is not a keep alive, remain in
+	 * busy state */
+	if (client->request.is_pending && !keep_alive_in_progress)
 		return -EBUSY;
 
 	/* Make sure that we know the session */

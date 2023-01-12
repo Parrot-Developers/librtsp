@@ -32,7 +32,8 @@
 
 
 #define RTSP_CLIENT_DEFAULT_SOFTWARE_NAME "librtsp_client"
-#define RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE 5
+#define RTSP_CLIENT_MAX_FAILED_REQUESTS 5
+#define RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE 3
 
 
 enum rtsp_client_state {
@@ -76,11 +77,12 @@ struct rtsp_client {
 
 	/* States */
 	enum rtsp_client_conn_state conn_state;
-	int user_connecting;
 	char *addr;
+	struct sockaddr_in remote_addr_in;
 	unsigned int cseq;
 	uint32_t methods_allowed;
 	struct list_node sessions;
+	unsigned int failed_requests;
 
 	struct {
 		struct rtsp_request_header header;

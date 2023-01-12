@@ -436,7 +436,7 @@ static int rtsp_server_setup(struct rtsp_server *server,
 			server, request->request_header.session_id);
 		if (session == NULL) {
 			ret = -ENOENT;
-			ULOGE("%s: session not found", __func__);
+			ULOGW("%s: session not found", __func__);
 			*status = RTSP_STATUS_CODE_SESSION_NOT_FOUND;
 			goto out;
 		}
@@ -513,7 +513,7 @@ static int rtsp_server_play(struct rtsp_server *server,
 	session = rtsp_server_session_find(server,
 					   request->request_header.session_id);
 	if ((session == NULL) || (session->media_count == 0)) {
-		ULOGE("%s: session not found", __func__);
+		ULOGW("%s: session not found", __func__);
 		*status = RTSP_STATUS_CODE_SESSION_NOT_FOUND;
 		ret = -ENOENT;
 		goto out;
@@ -585,7 +585,7 @@ static int rtsp_server_pause(struct rtsp_server *server,
 	session = rtsp_server_session_find(server,
 					   request->request_header.session_id);
 	if ((session == NULL) || (session->media_count == 0)) {
-		ULOGE("%s: session not found", __func__);
+		ULOGW("%s: session not found", __func__);
 		*status = RTSP_STATUS_CODE_SESSION_NOT_FOUND;
 		ret = -ENOENT;
 		goto out;
@@ -656,7 +656,7 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 	session = rtsp_server_session_find(server,
 					   request->request_header.session_id);
 	if ((session == NULL) || (session->media_count == 0)) {
-		ULOGE("%s: session not found", __func__);
+		ULOGW("%s: session not found", __func__);
 		*status = RTSP_STATUS_CODE_SESSION_NOT_FOUND;
 		ret = -ENOENT;
 		goto out;
@@ -737,7 +737,7 @@ rtsp_server_get_parameter(struct rtsp_server *server,
 	session = rtsp_server_session_find(server,
 					   request->request_header.session_id);
 	if ((session == NULL) || (session->media_count == 0)) {
-		ULOGE("%s: session not found", __func__);
+		ULOGW("%s: session not found", __func__);
 		*status = RTSP_STATUS_CODE_SESSION_NOT_FOUND;
 		ret = -ENOENT;
 		goto out;
@@ -804,7 +804,7 @@ static int rtsp_server_request_process(struct rtsp_server *server,
 				       struct pomp_conn *conn,
 				       struct rtsp_message *msg)
 {
-	int ret = 0, status = 0;
+	int ret = 0, err = 0, status = 0;
 	const struct sockaddr *peer_addr = NULL;
 	uint32_t addrlen = 0;
 	char dst_address[INET_ADDRSTRLEN] = "";
@@ -845,44 +845,30 @@ static int rtsp_server_request_process(struct rtsp_server *server,
 	default:
 	case RTSP_METHOD_TYPE_UNKNOWN:
 		ULOGE("%s: unknown method", __func__);
-		goto out;
+		break;
 	case RTSP_METHOD_TYPE_OPTIONS:
-		ret = rtsp_server_options(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_options(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_DESCRIBE:
-		ret = rtsp_server_describe(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_describe(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_ANNOUNCE:
 		/* TODO */
 		break;
 	case RTSP_METHOD_TYPE_SETUP:
-		ret = rtsp_server_setup(server, dst_address, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_setup(server, dst_address, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_PLAY:
-		ret = rtsp_server_play(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_play(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_PAUSE:
-		ret = rtsp_server_pause(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_pause(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_TEARDOWN:
-		ret = rtsp_server_teardown(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_teardown(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_GET_PARAMETER:
-		ret = rtsp_server_get_parameter(server, request, &status);
-		if (ret < 0)
-			goto out;
+		err = rtsp_server_get_parameter(server, request, &status);
 		break;
 	case RTSP_METHOD_TYPE_SET_PARAMETER:
 		/* TODO */
@@ -896,14 +882,14 @@ static int rtsp_server_request_process(struct rtsp_server *server,
 	}
 
 out:
-	if ((ret < 0) && (request != NULL)) {
+	if ((err < 0) && (request != NULL)) {
 		/* Reply with an error */
 		error_response(
 			server,
 			request,
 			(RTSP_STATUS_CLASS(status) > RTSP_STATUS_CLASS_SUCCESS)
 				? status
-				: ret);
+				: err);
 		rtsp_server_pending_request_remove(server, request);
 	}
 	return ret;
@@ -934,7 +920,7 @@ static void rtsp_server_pomp_cb(struct pomp_ctx *ctx,
 				void *userdata)
 {
 	struct rtsp_server *server = (struct rtsp_server *)userdata;
-	int ret, err;
+	int ret;
 	size_t len = 0;
 	const void *cdata = NULL;
 	struct rtsp_message msg;
@@ -959,18 +945,10 @@ static void rtsp_server_pomp_cb(struct pomp_ctx *ctx,
 	/* Iterate over complete messages */
 	while ((ret = rtsp_get_next_message(
 			server->request_buf, &msg, &server->parser_ctx)) == 0) {
-		if (msg.type == RTSP_MESSAGE_TYPE_REQUEST) {
-			err = rtsp_server_request_process(server, conn, &msg);
-			if (err < 0)
-				ULOG_ERRNO("rtsp_server_request_process", -err);
-		} else {
-			err = rtsp_server_response_process(server, &msg);
-			if (err < 0) {
-				ULOG_ERRNO("rtsp_server_response_process",
-					   -err);
-			}
-		}
-
+		if (msg.type == RTSP_MESSAGE_TYPE_REQUEST)
+			(void)rtsp_server_request_process(server, conn, &msg);
+		else
+			(void)rtsp_server_response_process(server, &msg);
 		rtsp_buffer_remove_first_bytes(server->request_buf,
 					       msg.total_len);
 	}

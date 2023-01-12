@@ -28,7 +28,6 @@
 #ifndef _RTSP_PRIV_H_
 #define _RTSP_PRIV_H_
 
-#define _GNU_SOURCE
 #include <errno.h>
 #include <limits.h>
 #include <pthread.h>
