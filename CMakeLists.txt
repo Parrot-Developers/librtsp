@@ -27,6 +27,9 @@ set(LIB_SOURCES
 add_library(${PROJECT_NAME} ${LIB_SOURCES})
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
+set_target_properties(rtsp PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
