@@ -1088,7 +1088,11 @@ int rtsp_server_new(const char *software_name,
 		goto error;
 	}
 
-	ret = pomp_ctx_setup_keepalive(server->pomp, 0, 0, 0, 0);
+	/* Set tcp keepalive timeout to 30 seconds and 10 retries
+	 * for dead peer detection,
+	 * the 5 seconds and 2 retries default of pomp_ctx
+	 * may be too aggressive for wireless connections */
+	ret = pomp_ctx_setup_keepalive(server->pomp, 1, 30, 1, 10);
 	if (ret < 0) {
 		ULOG_ERRNO("pomp_ctx_setup_keepalive", -ret);
 		goto error;
