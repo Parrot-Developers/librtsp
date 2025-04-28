@@ -490,7 +490,7 @@ static int rtsp_time_read(char *str, struct rtsp_time *time)
 			unsigned int hrs = atoi(hrs_str);
 			unsigned int min = atoi(min_str);
 			float sec_f = atof(sec_str);
-			time->npt.sec = (time_t)sec_f;
+			time->npt.sec = (uint64_t)sec_f;
 			time->npt.sec += min * 60 + hrs * 60 * 60;
 			time->npt.usec = (uint32_t)(
 				(sec_f - (float)((unsigned int)sec_f)) *
@@ -502,7 +502,7 @@ static int rtsp_time_read(char *str, struct rtsp_time *time)
 			} else {
 				/* Seconds only */
 				float sec = atof(str);
-				time->npt.sec = (time_t)sec;
+				time->npt.sec = (uint64_t)sec;
 				time->npt.usec = (uint32_t)(
 					(sec - (float)time->npt.sec) * 1000000);
 			}
@@ -1122,7 +1122,7 @@ int rtsp_rtp_info_header_write(struct rtsp_rtp_info_header *const *rtp_info,
 				   ret,
 				   return ret,
 				   str,
-				   ";" RTSP_RTP_INFO_RTPTIME "=%d",
+				   ";" RTSP_RTP_INFO_RTPTIME "=%" PRIu32,
 				   rtpi->rtptime);
 		}
 
@@ -1191,7 +1191,7 @@ int rtsp_rtp_info_header_read(char *str,
 			val = strtok_r(NULL, "", &temp3);
 
 			if (key == NULL) {
-				ULOGE("Invalid RTSP Header key");
+				ULOGE("invalid RTSP Header key");
 				rtsp_rtp_info_header_free(&rtpi);
 				ret = -EINVAL;
 				goto exit;
@@ -1205,8 +1205,21 @@ int rtsp_rtp_info_header_read(char *str,
 			/* 'rtptime' */
 			if ((strcmp(key, RTSP_RTP_INFO_RTPTIME) == 0) &&
 			    (val)) {
-				rtpi->rtptime = atoi(val);
-				rtpi->rtptime_valid = 1;
+				char *endptr = NULL;
+				errno = 0;
+				uint32_t parsedint = strtoul(val, &endptr, 10);
+				if ((val[0] == '\0') || (endptr[0] != '\0') ||
+				    (errno != 0)) {
+					ULOGE("%s: invalid rtptime: '%s'",
+					      __func__,
+					      val);
+					rtsp_rtp_info_header_free(&rtpi);
+					ret = -errno;
+					goto exit;
+				} else {
+					rtpi->rtptime = parsedint;
+					rtpi->rtptime_valid = 1;
+				}
 			}
 
 			param = strtok_r(NULL, ";", &temp2);
@@ -2821,7 +2834,7 @@ int rtsp_get_next_message(struct pomp_buffer *data,
 			ret = rtsp_request_header_read(raw_data,
 						       ctx->header_len,
 						       &ctx->msg.header.req,
-						       &ctx->msg.body);
+						       NULL);
 			if (ret < 0)
 				ULOG_ERRNO("rtsp_request_header_read", -ret);
 			ctx->msg.body_len = ctx->msg.header.req.content_length;
@@ -2829,7 +2842,7 @@ int rtsp_get_next_message(struct pomp_buffer *data,
 			ret = rtsp_response_header_read(raw_data,
 							ctx->header_len,
 							&ctx->msg.header.resp,
-							&ctx->msg.body);
+							NULL);
 			if (ret < 0)
 				ULOG_ERRNO("rtsp_response_header_read", -ret);
 			ctx->msg.body_len = ctx->msg.header.resp.content_length;
@@ -2852,7 +2865,9 @@ int rtsp_get_next_message(struct pomp_buffer *data,
 		rtsp_response_header_copy(&ctx->msg.header.resp,
 					  &msg->header.resp);
 	msg->type = ctx->msg.type;
-	msg->body = ctx->msg.body;
+	/* Pointer to the pomp_buffer must be set only when the message is
+	 * complete to avoid pointer invalidation due to pomp_buffer realloc */
+	msg->body = (char *)raw_data + ctx->header_len;
 	msg->body_len = ctx->msg.body_len;
 	msg->total_len = ctx->msg.total_len;
 

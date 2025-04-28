@@ -111,21 +111,21 @@ enum rtsp_time_format {
 struct rtsp_time_npt {
 	int now;
 	int infinity;
-	time_t sec;
+	uint64_t sec;
 	uint32_t usec;
 };
 
 /* RTSP SMPTE Relative Timestamps, see RFC 2326 chapter 3.5 */
 struct rtsp_time_smpte {
 	int infinity;
-	time_t sec;
+	uint64_t sec;
 	unsigned int frames;
 };
 
 /* RTSP Absolute Time (UTC, ISO 8601), see RFC 2326 chapter 3.7 */
 struct rtsp_time_absolute {
 	int infinity;
-	time_t sec;
+	uint64_t sec;
 	uint32_t usec;
 };
 
@@ -141,7 +141,7 @@ struct rtsp_time {
 struct rtsp_range {
 	struct rtsp_time start;
 	struct rtsp_time stop;
-	time_t time;
+	uint64_t time;
 };
 
 

@@ -94,6 +94,7 @@ struct rtsp_server_cbs {
 		      void *userdata);
 
 	void (*teardown)(struct rtsp_server *server,
+			 const char *path,
 			 const char *session_id,
 			 enum rtsp_server_teardown_reason reason,
 			 const struct rtsp_header_ext *ext,
@@ -102,7 +103,6 @@ struct rtsp_server_cbs {
 			 void *media_ctx,
 			 void *stream_userdata,
 			 void *userdata);
-
 
 	void (*request_timeout)(struct rtsp_server *server,
 				void *request_ctx,
@@ -183,11 +183,11 @@ RTSP_API int rtsp_server_announce(struct rtsp_server *server,
 				  char *session_description);
 
 
-RTSP_API int
-rtsp_server_force_session_teardown(struct rtsp_server *server,
-				   const char *session_id,
-				   const struct rtsp_header_ext *ext,
-				   size_t ext_count);
+RTSP_API int rtsp_server_force_teardown(struct rtsp_server *server,
+					const char *session_id,
+					const char *resource_uri,
+					const struct rtsp_header_ext *ext,
+					size_t ext_count);
 
 
 RTSP_API const char *

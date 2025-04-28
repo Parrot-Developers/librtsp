@@ -39,8 +39,10 @@
 
 struct rtsp_server_session_media {
 	struct rtsp_server_session *session;
+	char *uri;
 	char *path;
 	void *userdata;
+	bool is_tearing_down;
 
 	struct list_node node;
 };
@@ -145,6 +147,7 @@ struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
 struct rtsp_server_session_media *
 rtsp_server_session_media_add(struct rtsp_server *server,
 			      struct rtsp_server_session *session,
+			      const char *uri,
 			      const char *path);
 
 

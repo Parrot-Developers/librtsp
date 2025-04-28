@@ -32,6 +32,7 @@
 
 
 #define RTSP_CLIENT_DEFAULT_SOFTWARE_NAME "librtsp_client"
+#define RTSP_CLIENT_SESSION_ID_LENGTH 8
 #define RTSP_CLIENT_MAX_FAILED_REQUESTS 5
 #define RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE 3
 
@@ -54,6 +55,15 @@ enum rtsp_client_state {
 };
 
 
+struct rtsp_client_session_media {
+	struct rtsp_client_session *session;
+	char *path;
+	void *userdata;
+
+	struct list_node node;
+};
+
+
 struct rtsp_client_session {
 	char *id;
 	struct pomp_timer *timer;
@@ -63,6 +73,11 @@ struct rtsp_client_session {
 	unsigned int failed_keep_alive;
 	int keep_alive_in_progress;
 	int internal_teardown;
+
+	/* Medias */
+	unsigned int media_count;
+	struct list_node medias;
+
 	struct list_node node;
 };
 
@@ -114,6 +129,27 @@ int rtsp_client_remove_session_internal(struct rtsp_client *client,
 
 
 void rtsp_client_remove_all_sessions(struct rtsp_client *client);
+
+
+struct rtsp_client_session *rtsp_client_session_find(struct rtsp_client *client,
+						     const char *session_id);
+
+
+struct rtsp_client_session_media *
+rtsp_client_session_media_add(struct rtsp_client *client,
+			      struct rtsp_client_session *session,
+			      const char *path);
+
+
+int rtsp_client_session_media_remove(struct rtsp_client *client,
+				     struct rtsp_client_session *session,
+				     struct rtsp_client_session_media *media);
+
+
+struct rtsp_client_session_media *
+rtsp_client_session_media_find(struct rtsp_client *client,
+			       struct rtsp_client_session *session,
+			       const char *path);
 
 
 void rtsp_client_pomp_timer_cb(struct pomp_timer *timer, void *userdata);

@@ -149,6 +149,13 @@ struct rtsp_client_cbs {
 			 size_t ext_count,
 			 const char *sdp,
 			 void *userdata);
+
+	void (*teardown)(struct rtsp_client *client,
+			 const char *path,
+			 const char *session_id,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
+			 void *userdata);
 };
 
 
@@ -217,6 +224,7 @@ RTSP_API int rtsp_client_pause(struct rtsp_client *client,
 
 
 RTSP_API int rtsp_client_teardown(struct rtsp_client *client,
+				  const char *resource_url,
 				  const char *session_id,
 				  const struct rtsp_header_ext *ext,
 				  size_t ext_count,

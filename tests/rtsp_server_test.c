@@ -368,6 +368,7 @@ out:
 
 
 static void teardown_cb(struct rtsp_server *server,
+			const char *path,
 			const char *session_id,
 			enum rtsp_server_teardown_reason reason,
 			const struct rtsp_header_ext *ext,

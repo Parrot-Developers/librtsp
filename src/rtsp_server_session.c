@@ -95,6 +95,10 @@ struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
 	list_add_before(&server->sessions, &session->node);
 	server->session_count++;
 
+	ULOGI("server session %s added (URI='%s')",
+	      session->session_id,
+	      session->uri);
+
 	return session;
 
 error:
@@ -135,15 +139,19 @@ int rtsp_server_session_remove(struct rtsp_server *server,
 		return -ENOENT;
 	}
 
-	/* Remove from the list */
-	list_del(&session->node);
-	server->session_count--;
-
 	/* Remove all medias */
 	list_walk_entry_forward_safe(&session->medias, media, tmp_media, node)
 	{
 		rtsp_server_session_media_remove(server, session, media);
 	}
+
+	ULOGI("server session %s removed (URI='%s')",
+	      session->session_id,
+	      session->uri);
+
+	/* Remove from the list */
+	list_del(&session->node);
+	server->session_count--;
 
 	if (session->timer != NULL) {
 		ret = pomp_timer_destroy(session->timer);
@@ -208,6 +216,7 @@ struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
 struct rtsp_server_session_media *
 rtsp_server_session_media_add(struct rtsp_server *server,
 			      struct rtsp_server_session *session,
+			      const char *uri,
 			      const char *path)
 {
 	struct rtsp_server_session_media *media = NULL, *_media;
@@ -223,11 +232,14 @@ rtsp_server_session_media_add(struct rtsp_server *server,
 	ULOG_ERRNO_RETURN_VAL_IF(media == NULL, ENOMEM, NULL);
 	list_node_unref(&media->node);
 	media->session = session;
+	media->uri = strdup(uri);
 	media->path = strdup(path);
 
 	/* Add to the list */
 	list_add_before(&session->medias, &media->node);
 	session->media_count++;
+
+	ULOGI("server session %s media '%s' added", session->session_id, path);
 
 	return media;
 }
@@ -261,6 +273,11 @@ int rtsp_server_session_media_remove(struct rtsp_server *server,
 	list_del(&media->node);
 	session->media_count--;
 
+	ULOGI("server session %s media '%s' removed",
+	      session->session_id,
+	      media->path);
+
+	free(media->uri);
 	free(media->path);
 	free(media);
 

@@ -216,6 +216,7 @@ static void teardown_req(struct app *app)
 	ULOGI("request teardown");
 
 	res = rtsp_client_teardown(app->client,
+				   NULL,
 				   app->session_id,
 				   header_ext,
 				   1,

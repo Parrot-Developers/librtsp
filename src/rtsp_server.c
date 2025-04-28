@@ -75,6 +75,7 @@ static int error_response(struct rtsp_server *server,
 	struct pomp_buffer *resp_buf = NULL;
 	int status_code = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	memset(&response, 0, sizeof(response));
 
@@ -99,7 +100,8 @@ static int error_response(struct rtsp_server *server,
 	request->response_header.status_string = strdup(status_string);
 	request->response_header.cseq = request->request_header.cseq;
 	request->response_header.server = strdup(server->software_name);
-	time(&request->response_header.date);
+	time_get_monotonic(&cur_ts);
+	request->response_header.date = cur_ts.tv_sec;
 
 	/* Create the response */
 	response.max_len = server->max_msg_size;
@@ -205,6 +207,7 @@ void rtsp_server_session_timer_cb(struct pomp_timer *timer, void *userdata)
 	{
 		(*server->cbs.teardown)(
 			server,
+			media->path,
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_SESSION_TIMEOUT,
 			NULL,
@@ -294,6 +297,7 @@ static int rtsp_server_options(struct rtsp_server *server,
 	int ret = 0;
 	struct rtsp_string response;
 	struct pomp_buffer *resp_buf = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	memset(&response, 0, sizeof(response));
 
@@ -312,7 +316,8 @@ static int rtsp_server_options(struct rtsp_server *server,
 	request->response_header.status_string = strdup(RTSP_STATUS_STRING_OK);
 	request->response_header.cseq = request->request_header.cseq;
 	request->response_header.server = strdup(server->software_name);
-	time(&request->response_header.date);
+	time_get_monotonic(&cur_ts);
+	request->response_header.date = cur_ts.tv_sec;
 	request->response_header.public_methods =
 		RTSP_METHOD_FLAG_DESCRIBE | RTSP_METHOD_FLAG_SETUP |
 		RTSP_METHOD_FLAG_TEARDOWN | RTSP_METHOD_FLAG_PLAY |
@@ -402,7 +407,7 @@ static int rtsp_server_setup(struct rtsp_server *server,
 			     int *status)
 {
 	int ret = 0;
-	char *uri = NULL, *path = NULL;
+	char *uri = NULL, *host = NULL, *path = NULL;
 	struct rtsp_server_session *session = NULL;
 	struct rtsp_server_session_media *media = NULL;
 	int session_created = 0;
@@ -420,11 +425,15 @@ static int rtsp_server_setup(struct rtsp_server *server,
 		goto out;
 	}
 
+	uri = xstrdup(request->request_header.uri);
+	ret = rtsp_url_parse(uri, &host, NULL, &path);
+	if (ret < 0)
+		goto out;
+
 	if (request->request_header.session_id == NULL) {
 		/* New session */
-		session = rtsp_server_session_add(server,
-						  server->session_timeout_ms,
-						  request->request_header.uri);
+		session = rtsp_server_session_add(
+			server, server->session_timeout_ms, host);
 		if (session == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -442,12 +451,8 @@ static int rtsp_server_setup(struct rtsp_server *server,
 		}
 	}
 
-	uri = xstrdup(request->request_header.uri);
-	ret = rtsp_url_parse(uri, NULL, NULL, &path);
-	if (ret < 0)
-		goto out;
-
-	media = rtsp_server_session_media_add(server, session, path);
+	media = rtsp_server_session_media_add(
+		server, session, request->request_header.uri, path);
 	if (media == NULL) {
 		ret = -EPROTO;
 		goto out;
@@ -482,8 +487,10 @@ out:
 		rtsp_server_pending_request_remove(server, request);
 	}
 	free(uri);
-	if ((ret != 0) && (session_created))
+	if ((ret != 0) && (session_created)) {
+		/* TODO check if only session media must be removed */
 		rtsp_server_session_remove(server, session);
+	}
 	return ret;
 }
 
@@ -636,9 +643,12 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 				int *status)
 {
 	int ret = 0;
-	char *uri = NULL, *path = NULL;
+	char *uri = NULL, *path = NULL, *p = NULL;
+	bool media_found = false;
+	bool is_prefix = false;
+	size_t prefix_len = 0;
 	struct rtsp_server_session *session = NULL;
-	struct rtsp_server_session_media *media = NULL;
+	struct rtsp_server_session_media *media = NULL, *tmpmedia = NULL;
 	struct rtsp_server_pending_request_media *req_media;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
@@ -651,7 +661,13 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 	ret = rtsp_url_parse(uri, NULL, NULL, &path);
 	if (ret < 0)
 		goto out;
-	/* TODO: check that the path corresponds to the session */
+
+	/* Parse the path */
+	p = strchr(path, '/');
+	if (p == NULL) {
+		is_prefix = true;
+		prefix_len = strlen(path);
+	}
 
 	session = rtsp_server_session_find(server,
 					   request->request_header.session_id);
@@ -662,23 +678,48 @@ static int rtsp_server_teardown(struct rtsp_server *server,
 		goto out;
 	}
 
+	/* Check if the path corresponds to a media in the session */
+	media = rtsp_server_session_media_find(server, session, path);
+	if (media != NULL)
+		media_found = true;
+
 	rtsp_server_session_reset_timeout(session);
 
 	request->in_callback = 1;
 	session->op_in_progress = request->request_header.method;
 	list_walk_entry_forward(&session->medias, media, node)
 	{
+		if (media_found && strcmp(path, media->path) != 0) {
+			/* Filter-out non matching media */
+			continue;
+		}
+		if (!media_found && is_prefix &&
+		    strncmp(path, media->path, prefix_len) != 0) {
+			/* Filter-out non matching prefix */
+			continue;
+		}
 		req_media = rtsp_server_pending_request_media_add(
 			server, request, media);
 		if (req_media == NULL) {
 			ret = -ENOMEM;
 			goto out;
 		}
+		media->is_tearing_down = true;
+	}
+	if (list_is_empty(&request->medias)) {
+		ret = -ENOENT;
+		ULOGE("path '%s' not found", path);
+		goto out;
+	} else if (is_prefix) {
+		ULOGI("path '%s' is a prefix, "
+		      "tearing down all matching resources",
+		      path);
 	}
 	list_walk_entry_forward(&request->medias, req_media, node)
 	{
 		(*server->cbs.teardown)(
 			server,
+			media->path,
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_CLIENT_REQUEST,
 			request->request_header.ext,
@@ -695,7 +736,21 @@ out:
 		if (session)
 			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
-		rtsp_server_session_remove(server, session);
+		bool remaining = false;
+		list_walk_entry_forward_safe(
+			&session->medias, media, tmpmedia, node)
+		{
+			if (!media->is_tearing_down) {
+				remaining = true;
+			} else {
+				rtsp_server_session_media_remove(
+					server, session, media);
+			}
+		}
+		if (!remaining) {
+			ULOGI("all media torn down, removing session");
+			rtsp_server_session_remove(server, session);
+		}
 	}
 	free(uri);
 	return ret;
@@ -712,6 +767,7 @@ rtsp_server_get_parameter(struct rtsp_server *server,
 	struct rtsp_server_session *session = NULL;
 	struct rtsp_string response;
 	struct pomp_buffer *resp_buf = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request == NULL, EINVAL);
@@ -749,7 +805,8 @@ rtsp_server_get_parameter(struct rtsp_server *server,
 	request->response_header.status_string = strdup(RTSP_STATUS_STRING_OK);
 	request->response_header.cseq = request->request_header.cseq;
 	request->response_header.server = strdup(server->software_name);
-	time(&request->response_header.date);
+	time_get_monotonic(&cur_ts);
+	request->response_header.date = cur_ts.tv_sec;
 	request->response_header.session_id =
 		strdup(request->request_header.session_id);
 	request->response_header.session_timeout = session->timeout_ms / 1000;
@@ -903,7 +960,7 @@ static int rtsp_server_response_process(struct rtsp_server *server,
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
 
 	ULOGI("response to RTSP request %s: status=%d(%s) cseq=%d session=%s",
-	      rtsp_method_type_str(RTSP_METHOD_TYPE_UNKNOWN),
+	      rtsp_method_type_str(msg->header.req.method),
 	      msg->header.resp.status_code,
 	      msg->header.resp.status_string ? msg->header.resp.status_string
 					     : "-",
@@ -991,7 +1048,7 @@ static int rtsp_server_send_teardown(struct rtsp_server *server,
 	ret = rtsp_request_header_copy_ext(&header, ext, ext_count);
 	if (ret < 0)
 		goto out;
-	ret = asprintf(&header.uri, "/%s", uri);
+	ret = asprintf(&header.uri, "%s", uri);
 	if (ret <= 0) {
 		ret = -ENOMEM;
 		ULOG_ERRNO("asprintf", -ret);
@@ -1228,6 +1285,7 @@ int rtsp_server_reply_to_describe(struct rtsp_server *server,
 	struct pomp_buffer *resp_buf = NULL;
 	int status_code = 0, error_status = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request_ctx == NULL, EINVAL);
@@ -1275,7 +1333,8 @@ int rtsp_server_reply_to_describe(struct rtsp_server *server,
 	request->response_header.status_string = strdup(status_string);
 	request->response_header.cseq = request->request_header.cseq;
 	request->response_header.server = strdup(server->software_name);
-	time(&request->response_header.date);
+	time_get_monotonic(&cur_ts);
+	request->response_header.date = cur_ts.tv_sec;
 	request->response_header.content_length = strlen(session_description);
 	request->response_header.content_type = strdup(RTSP_CONTENT_TYPE_SDP);
 	/* TODO */
@@ -1370,6 +1429,7 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 	struct pomp_buffer *resp_buf = NULL;
 	int status_code = 0, error_status = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request_ctx == NULL, EINVAL);
@@ -1431,7 +1491,8 @@ int rtsp_server_reply_to_setup(struct rtsp_server *server,
 	request->response_header.status_string = strdup(status_string);
 	request->response_header.cseq = request->request_header.cseq;
 	request->response_header.server = strdup(server->software_name);
-	time(&request->response_header.date);
+	time_get_monotonic(&cur_ts);
+	request->response_header.date = cur_ts.tv_sec;
 	request->response_header.session_id = strdup(session->session_id);
 	request->response_header.session_timeout = session->timeout_ms / 1000;
 	request->response_header.transport = rtsp_transport_header_new();
@@ -1561,6 +1622,7 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 	struct rtsp_server_pending_request_media *req_media = NULL, *rm = NULL;
 	int status_code = 0, error_status = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request_ctx == NULL, EINVAL);
@@ -1687,7 +1749,8 @@ int rtsp_server_reply_to_play(struct rtsp_server *server,
 		request->response_header.cseq = request->request_header.cseq;
 		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
-		time(&request->response_header.date);
+		time_get_monotonic(&cur_ts);
+		request->response_header.date = cur_ts.tv_sec;
 		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(session->session_id);
@@ -1781,6 +1844,7 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 	struct rtsp_server_pending_request_media *req_media = NULL, *rm = NULL;
 	int status_code = 0, error_status = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request_ctx == NULL, EINVAL);
@@ -1878,7 +1942,8 @@ int rtsp_server_reply_to_pause(struct rtsp_server *server,
 		request->response_header.cseq = request->request_header.cseq;
 		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
-		time(&request->response_header.date);
+		time_get_monotonic(&cur_ts);
+		request->response_header.date = cur_ts.tv_sec;
 		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(session->session_id);
@@ -1969,10 +2034,11 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 	struct rtsp_string response;
 	struct pomp_buffer *resp_buf = NULL;
 	struct rtsp_server_session *session = NULL;
-	struct rtsp_server_session_media *media = NULL;
+	struct rtsp_server_session_media *media = NULL, *tmpmedia = NULL;
 	struct rtsp_server_pending_request_media *req_media = NULL, *rm = NULL;
 	int status_code = 0, error_status = 0;
 	const char *status_string = NULL;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request_ctx == NULL, EINVAL);
@@ -2048,7 +2114,8 @@ int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 		request->response_header.cseq = request->request_header.cseq;
 		free(request->response_header.server);
 		request->response_header.server = strdup(server->software_name);
-		time(&request->response_header.date);
+		time_get_monotonic(&cur_ts);
+		request->response_header.date = cur_ts.tv_sec;
 		free(request->response_header.session_id);
 		request->response_header.session_id =
 			strdup(request->request_header.session_id);
@@ -2117,7 +2184,21 @@ out:
 				session->op_in_progress =
 					RTSP_METHOD_TYPE_UNKNOWN;
 			rtsp_server_pending_request_remove(server, request);
-			rtsp_server_session_remove(server, session);
+			bool remaining = false;
+			list_walk_entry_forward_safe(
+				&session->medias, media, tmpmedia, node)
+			{
+				if (!media->is_tearing_down) {
+					remaining = true;
+				} else {
+					rtsp_server_session_media_remove(
+						server, session, media);
+				}
+			}
+			if (!remaining) {
+				ULOGI("all media torn down, removing session");
+				rtsp_server_session_remove(server, session);
+			}
 		}
 	}
 	if (resp_buf != NULL)
@@ -2133,10 +2214,11 @@ int rtsp_server_announce(struct rtsp_server *server,
 			 size_t ext_count,
 			 char *session_description)
 {
+	int ret = 0;
 	struct rtsp_request_header header;
 	struct pomp_buffer *req_buf;
 	struct rtsp_string request;
-	int ret = 0;
+	struct timespec cur_ts = {0, 0};
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(uri == NULL, EINVAL);
@@ -2150,7 +2232,8 @@ int rtsp_server_announce(struct rtsp_server *server,
 	header.cseq = server->cseq++;
 	header.content_length = strlen(session_description);
 	header.content_type = RTSP_CONTENT_TYPE_SDP;
-	time(&header.date);
+	time_get_monotonic(&cur_ts);
+	header.date = cur_ts.tv_sec;
 	header.server = server->software_name;
 	ret = rtsp_request_header_copy_ext(&header, ext, ext_count);
 	if (ret < 0)
@@ -2203,22 +2286,34 @@ out:
 }
 
 
-int rtsp_server_force_session_teardown(struct rtsp_server *server,
-				       const char *session_id,
-				       const struct rtsp_header_ext *ext,
-				       size_t ext_count)
+int rtsp_server_force_teardown(struct rtsp_server *server,
+			       const char *session_id,
+			       const char *resource_uri,
+			       const struct rtsp_header_ext *ext,
+			       size_t ext_count)
 {
 	int ret;
 	struct rtsp_server_session *session = NULL;
-	struct rtsp_server_session_media *media = NULL;
+	struct rtsp_server_session_media *media = NULL, *_media = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
 
 	session = rtsp_server_session_find(server, session_id);
 	if (session == NULL) {
-		ULOGE("%s: session not found", __func__);
+		ULOGE("%s: session '%s' not found", __func__, session_id);
 		return -ENOENT;
+	}
+
+	if (resource_uri != NULL) {
+		media = rtsp_server_session_media_find(
+			server, session, resource_uri);
+		if (media == NULL) {
+			ULOGE("%s: media not found: %s",
+			      __func__,
+			      resource_uri);
+			return -ENOENT;
+		}
 	}
 
 	switch (session->op_in_progress) {
@@ -2226,34 +2321,62 @@ int rtsp_server_force_session_teardown(struct rtsp_server *server,
 		/* No op in progress, proceed with forced teardown */
 		break;
 	case RTSP_METHOD_TYPE_TEARDOWN:
+		/* TODO: check that this teardown relates to the current
+		 * resource */
 		/* Teardown already in progress */
-		return -EALREADY;
+		ret = -EALREADY;
+		goto out;
 	default:
 		/* Any other operation */
-		return -EBUSY;
+		ret = -EBUSY;
+		goto out;
 	}
 
-	ULOGI("force remove on session '%s'", session->session_id);
+	if (media != NULL) {
+		ULOGI("force remove on session '%s', media '%s'",
+		      session->session_id,
+		      media->path);
+	} else {
+		ULOGI("force remove on session '%s'", session->session_id);
+	}
 
-	list_walk_entry_forward(&session->medias, media, node)
+	list_walk_entry_forward(&session->medias, _media, node)
 	{
+		if ((media != NULL) && (media != _media))
+			continue;
+
 		(*server->cbs.teardown)(
 			server,
+			_media->path,
 			session->session_id,
 			RTSP_SERVER_TEARDOWN_REASON_FORCED_TEARDOWN,
 			ext,
 			ext_count,
 			NULL,
-			(void *)media,
-			media->userdata,
+			(void *)_media,
+			_media->userdata,
 			server->cbs_userdata);
 	}
 
-	ret = rtsp_server_send_teardown(
-		server, session->uri, session->session_id, ext, ext_count);
+	ret = rtsp_server_send_teardown(server,
+					(media != NULL) ? media->uri
+							: session->uri,
+					session->session_id,
+					ext,
+					ext_count);
 	if (ret < 0)
 		ULOG_ERRNO("rtsp_server_send_teardown", -ret);
 
-	ret = rtsp_server_session_remove(server, session);
+	if (media != NULL) {
+		ret = rtsp_server_session_media_remove(server, session, media);
+		if (ret < 0)
+			ULOG_ERRNO("rtsp_server_session_media_remove", -ret);
+	} else {
+		ret = rtsp_server_session_remove(server, session);
+		if (ret < 0)
+			ULOG_ERRNO("rtsp_server_session_remove", -ret);
+	}
+
+out:
 	return ret;
 }

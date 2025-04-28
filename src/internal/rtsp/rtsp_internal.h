@@ -188,7 +188,7 @@ struct rtsp_request_header {
 
 	/* General header */
 	int cseq;
-	time_t date;
+	uint64_t date;
 	char *session_id;
 	unsigned int session_timeout;
 	struct rtsp_transport_header *transport[RTSP_TRANSPORT_MAX_COUNT];
@@ -327,7 +327,7 @@ struct rtsp_response_header {
 
 	/* General header */
 	int cseq;
-	time_t date;
+	uint64_t date;
 	char *session_id;
 	unsigned int session_timeout;
 	struct rtsp_transport_header *transport;
