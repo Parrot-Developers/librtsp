@@ -61,6 +61,15 @@ static void pomp_socket_cb(struct pomp_ctx *ctx,
 
 	ULOG_ERRNO_RETURN_IF(server == NULL, EINVAL);
 
+	int tos = IPTOS_PREC_FLASHOVERRIDE;
+	int err = setsockopt(
+		fd, IPPROTO_IP, IP_TOS, (const void *)&tos, sizeof(tos));
+	if (err < 0) {
+		ULOGW("failed to set class selector for socket: err=%d(%s)",
+		      err,
+		      strerror(-err));
+	}
+
 	if (server->cbs.socket_cb)
 		(*server->cbs.socket_cb)(fd, server->cbs_userdata);
 }
@@ -407,6 +416,8 @@ static int rtsp_server_setup(struct rtsp_server *server,
 			     int *status)
 {
 	int ret = 0;
+	char *content_base_uri = NULL;
+	char *p = NULL;
 	char *uri = NULL, *host = NULL, *path = NULL;
 	struct rtsp_server_session *session = NULL;
 	struct rtsp_server_session_media *media = NULL;
@@ -429,11 +440,19 @@ static int rtsp_server_setup(struct rtsp_server *server,
 	ret = rtsp_url_parse(uri, &host, NULL, &path);
 	if (ret < 0)
 		goto out;
+	content_base_uri = xstrdup(request->request_header.uri);
+	p = strrchr(content_base_uri, '/');
+	if (p == NULL) {
+		ULOGE("invalid path");
+		ret = -EINVAL;
+		goto out;
+	}
+	*p = '\0';
 
 	if (request->request_header.session_id == NULL) {
 		/* New session */
 		session = rtsp_server_session_add(
-			server, server->session_timeout_ms, host);
+			server, server->session_timeout_ms, content_base_uri);
 		if (session == NULL) {
 			ret = -ENOMEM;
 			goto out;
@@ -486,6 +505,7 @@ out:
 			session->op_in_progress = RTSP_METHOD_TYPE_UNKNOWN;
 		rtsp_server_pending_request_remove(server, request);
 	}
+	free(content_base_uri);
 	free(uri);
 	if ((ret != 0) && (session_created)) {
 		/* TODO check if only session media must be removed */
@@ -2288,7 +2308,7 @@ out:
 
 int rtsp_server_force_teardown(struct rtsp_server *server,
 			       const char *session_id,
-			       const char *resource_uri,
+			       const char *path,
 			       const struct rtsp_header_ext *ext,
 			       size_t ext_count)
 {
@@ -2305,13 +2325,10 @@ int rtsp_server_force_teardown(struct rtsp_server *server,
 		return -ENOENT;
 	}
 
-	if (resource_uri != NULL) {
-		media = rtsp_server_session_media_find(
-			server, session, resource_uri);
+	if (path != NULL) {
+		media = rtsp_server_session_media_find(server, session, path);
 		if (media == NULL) {
-			ULOGE("%s: media not found: %s",
-			      __func__,
-			      resource_uri);
+			ULOGE("%s: media not found: %s", __func__, path);
 			return -ENOENT;
 		}
 	}

@@ -41,6 +41,15 @@ static void pomp_socket_cb(struct pomp_ctx *ctx,
 
 	ULOG_ERRNO_RETURN_IF(client == NULL, EINVAL);
 
+	int tos = IPTOS_PREC_FLASHOVERRIDE;
+	int err = setsockopt(
+		fd, IPPROTO_IP, IP_TOS, (const void *)&tos, sizeof(tos));
+	if (err < 0) {
+		ULOGW("failed to set class selector for socket: err=%d(%s)",
+		      err,
+		      strerror(-err));
+	}
+
 	if (client->cbs.socket_cb)
 		(*client->cbs.socket_cb)(fd, client->cbs_userdata);
 }
@@ -400,6 +409,7 @@ static int send_teardown(struct rtsp_client *client,
 		return res;
 
 	session->internal_teardown = internal;
+	client->request.is_internal = internal;
 	client->request.is_pending = 1;
 	client->cseq++;
 	return 0;
@@ -526,12 +536,16 @@ static void teardown_request_complete(struct rtsp_client *client,
 				      int *session_removed)
 {
 	int err;
-	struct rtsp_client_session_media *media = NULL;
-	if (session == NULL)
-		return;
-	char *uri = xstrdup(req_uri);
-	char *base_uri = xstrdup(session->content_base);
+	char *uri = NULL;
+	char *base_uri = NULL;
 	char *path = NULL, *base_path = NULL;
+	struct rtsp_client_session_media *media = NULL;
+
+	if (session == NULL)
+		goto error;
+
+	uri = xstrdup(req_uri);
+	base_uri = xstrdup(session->content_base);
 	err = rtsp_url_parse(uri, NULL, NULL, &path);
 	if (err < 0)
 		goto out;
@@ -557,6 +571,7 @@ static void teardown_request_complete(struct rtsp_client *client,
 			client->cbs_userdata,
 			req_userdata);
 		session->internal_teardown = 0;
+		client->request.is_internal = 0;
 	}
 
 	if (media != NULL) {
@@ -566,6 +581,22 @@ static void teardown_request_complete(struct rtsp_client *client,
 		*session_removed = (session->media_count == 0);
 	} else {
 		*session_removed = true;
+	}
+
+	goto out;
+
+error:
+	if (!client->request.is_internal) {
+		(*client->cbs.teardown_resp)(
+			client,
+			session_id,
+			status,
+			rtsp_status_to_errno(resp_h->status_code),
+			resp_h->ext,
+			resp_h->ext_count,
+			client->cbs_userdata,
+			req_userdata);
+		client->request.is_internal = 0;
 	}
 
 out:
@@ -661,7 +692,7 @@ static int request_complete(struct rtsp_client *client,
 				ULOGE("%s: session not found", __func__);
 				res = -ENOENT;
 			}
-			goto exit;
+			goto no_session;
 		}
 		session->keep_alive_in_progress = 0;
 
@@ -691,6 +722,7 @@ static int request_complete(struct rtsp_client *client,
 		xfree((void **)&client->request.content_base);
 	}
 
+no_session:
 	switch (method) {
 	case RTSP_METHOD_TYPE_OPTIONS:
 		client->methods_allowed = resp_h->public_methods;
@@ -976,17 +1008,23 @@ static int teardown_request_process(struct rtsp_client *client,
 		goto out;
 	}
 
-	err = rtsp_url_parse(uri, NULL, NULL, &path);
-	if (err < 0) {
-		ULOG_ERRNO("rtsp_url_parse", -err);
-	} else {
+	ret = rtsp_url_parse(uri, NULL, NULL, &path);
+	if (ret < 0) {
+		ULOG_ERRNO("rtsp_url_parse", -ret);
+		goto out;
+	} else if (path == NULL) {
+		ret = -EINVAL;
+		ULOGE("invalid RTSP URL: '%s', path is missing",
+		      msg->header.req.uri);
+		goto out;
+	} else if (strcmp(msg->header.req.uri, session->content_base) != 0) {
 		media = rtsp_client_session_media_find(client, session, path);
 		if (media == NULL)
 			ULOGW("%s: media not found", __func__);
 	}
 
 	(*client->cbs.teardown)(client,
-				msg->header.req.uri,
+				media ? media->path : path,
 				msg->header.req.session_id,
 				msg->header.req.ext,
 				msg->header.req.ext_count,

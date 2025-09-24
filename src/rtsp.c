@@ -218,6 +218,10 @@ void rtsp_status_get(int status, int *code, const char **str)
 		*code = RTSP_STATUS_CODE(SERVICE_UNAVAILABLE);
 		*str = RTSP_STATUS_STRING(SERVICE_UNAVAILABLE);
 		break;
+	case -EPROTONOSUPPORT:
+		*code = RTSP_STATUS_CODE(UNSUPPORTED_TRANSPORT);
+		*str = RTSP_STATUS_STRING(UNSUPPORTED_TRANSPORT);
+		break;
 	default:
 		*code = RTSP_STATUS_CODE(INTERNAL_SERVER_ERROR);
 		*str = RTSP_STATUS_STRING(INTERNAL_SERVER_ERROR);
@@ -251,6 +255,8 @@ int rtsp_status_to_errno(int status)
 		return -ENOSYS;
 	case RTSP_STATUS_CODE_SERVICE_UNAVAILABLE:
 		return -EBUSY;
+	case RTSP_STATUS_CODE_UNSUPPORTED_TRANSPORT:
+		return -EPROTONOSUPPORT;
 	default:
 		return -EPROTO;
 	}
@@ -429,6 +435,9 @@ static int rtsp_time_write(const struct rtsp_time *time,
 			float usec = (float)time->npt.usec / 1000000. -
 				     (time->npt.usec / 1000000);
 			char fraction[6];
+			/* Avoid usec=0.999+ rounding to '1.000' */
+			if (usec >= 0.999f)
+				usec = 0.999f;
 			snprintf(fraction, sizeof(fraction), "%.3f", usec);
 			if ((min > 0) || (hrs > 0)) {
 				CHECK_FUNC(rtsp_sprintf,
@@ -1689,6 +1698,8 @@ int rtsp_transport_header_read(char *str,
 			trsp->lower_transport = RTSP_LOWER_TRANSPORT_UDP;
 		} else if (strcmp(val, RTSP_TRANSPORT_LOWER_UDP) == 0) {
 			trsp->lower_transport = RTSP_LOWER_TRANSPORT_UDP;
+		} else if (strcmp(val, RTSP_TRANSPORT_LOWER_TCP) == 0) {
+			trsp->lower_transport = RTSP_LOWER_TRANSPORT_TCP;
 		} else if (strcmp(val, RTSP_TRANSPORT_LOWER_MUX) == 0) {
 			trsp->lower_transport = RTSP_LOWER_TRANSPORT_MUX;
 		} else {

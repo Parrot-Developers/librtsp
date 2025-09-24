@@ -40,9 +40,17 @@
 #ifdef _WIN32
 #	include <winsock2.h>
 #	include <ws2tcpip.h>
+#	define PIPE_BUF 4096
+#	include <winsock2.h>
+#	undef OPAQUE
+#	undef near
+#	undef far
+#	define IPTOS_PREC_INTERNETCONTROL 0xc0
+#	define IPTOS_PREC_FLASHOVERRIDE 0x80
 #else /* !_WIN32 */
 #	include <arpa/inet.h>
 #	include <netinet/in.h>
+#	include <netinet/ip.h>
 #	include <netdb.h>
 #endif /* !_WIN32 */
 
@@ -52,10 +60,6 @@
 #include <rtsp/rtsp.h>
 
 #include "internal/rtsp/rtsp_internal.h"
-
-#ifdef _WIN32
-#	define PIPE_BUF 4096
-#endif /* _WIN32 */
 
 #define RTSP_DEFAULT_PORT 554
 
@@ -74,9 +78,6 @@ int rtsp_status_to_errno(int status);
 
 
 const char *rtsp_status_str(int status);
-
-
-int rtsp_url_parse(char *url, char **host, uint16_t *port, char **path);
 
 
 int rtsp_allow_header_write(uint32_t methods, struct rtsp_string *str);

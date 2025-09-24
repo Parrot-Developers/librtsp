@@ -103,6 +103,7 @@ struct rtsp_client {
 		struct rtsp_request_header header;
 		struct pomp_buffer *buf;
 		int is_pending;
+		int is_internal;
 		char *uri;
 		char *content_base;
 		void *userdata;

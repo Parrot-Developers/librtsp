@@ -158,6 +158,19 @@ struct rtsp_header_ext {
 #define RTSP_HEADER_EXT_PARROT_LINK_TYPE "X-com-parrot-link-type"
 
 
+/**
+ * Parse an RTSP URL to extract the host, port and path components.
+ * Note: the url parameter will be modified by the function.
+ * @param url: string containing the URL (will be modified)
+ * @param host: pointer to a string containing the host (optional, output)
+ * @param port: pointer to a string containing the port (optional, output)
+ * @param path: pointer to a string containing the path (optional, output)
+ * @return 0 on success, negative errno value in case of error
+ */
+RTSP_API int
+rtsp_url_parse(char *url, char **host, uint16_t *port, char **path);
+
+
 RTSP_API const char *rtsp_method_type_str(enum rtsp_method_type val);
 
 

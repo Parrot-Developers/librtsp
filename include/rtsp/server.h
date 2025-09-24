@@ -185,7 +185,7 @@ RTSP_API int rtsp_server_announce(struct rtsp_server *server,
 
 RTSP_API int rtsp_server_force_teardown(struct rtsp_server *server,
 					const char *session_id,
-					const char *resource_uri,
+					const char *path,
 					const struct rtsp_header_ext *ext,
 					size_t ext_count);
 
