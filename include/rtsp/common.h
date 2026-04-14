@@ -45,8 +45,11 @@ extern "C" {
 
 #include <errno.h>
 #include <inttypes.h>
+#include <stdbool.h>
 
 #include <libpomp.h>
+
+#include "rtsp_url.h"
 
 
 /* RTSP methods */
@@ -78,6 +81,8 @@ enum rtsp_method_type {
 #define RTSP_METHOD_FLAG_REDIRECT 0x00000200UL
 #define RTSP_METHOD_FLAG_RECORD 0x00000400UL
 
+#define RTSP_SESSION_DESCRIPTION_MAX_LEN (UINT16_MAX)
+
 
 /**
  * Transport definitions
@@ -92,6 +97,12 @@ enum rtsp_lower_transport {
 	RTSP_LOWER_TRANSPORT_UDP = 0,
 	RTSP_LOWER_TRANSPORT_TCP,
 	RTSP_LOWER_TRANSPORT_MUX,
+};
+
+enum rtsp_transport_method {
+	RTSP_TRANSPORT_METHOD_UNKNOWN = 0,
+	RTSP_TRANSPORT_METHOD_PLAY,
+	RTSP_TRANSPORT_METHOD_RECORD,
 };
 
 
@@ -158,17 +169,10 @@ struct rtsp_header_ext {
 #define RTSP_HEADER_EXT_PARROT_LINK_TYPE "X-com-parrot-link-type"
 
 
-/**
- * Parse an RTSP URL to extract the host, port and path components.
- * Note: the url parameter will be modified by the function.
- * @param url: string containing the URL (will be modified)
- * @param host: pointer to a string containing the host (optional, output)
- * @param port: pointer to a string containing the port (optional, output)
- * @param path: pointer to a string containing the path (optional, output)
- * @return 0 on success, negative errno value in case of error
- */
-RTSP_API int
-rtsp_url_parse(char *url, char **host, uint16_t *port, char **path);
+RTSP_API const char *rtsp_url_scheme_str(enum rtsp_url_scheme val);
+
+
+RTSP_API enum rtsp_url_scheme rtsp_url_scheme_from_str(const char *str);
 
 
 RTSP_API const char *rtsp_method_type_str(enum rtsp_method_type val);
@@ -185,6 +189,10 @@ RTSP_API const char *rtsp_time_format_str(enum rtsp_time_format val);
 
 RTSP_API int rtsp_range_get_duration_us(const struct rtsp_range *range,
 					int64_t *duration);
+
+
+RTSP_API bool rtsp_range_cmp(const struct rtsp_range *range1,
+			     const struct rtsp_range *range2);
 
 
 static inline int rtsp_time_us_to_npt(uint64_t time_us,

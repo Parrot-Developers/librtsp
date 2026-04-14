@@ -30,11 +30,21 @@
 
 #include "rtsp_priv.h"
 
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/ssl.h>
+#include <transport-packet/tpkt.h>
+#include <transport-socket/tskt.h>
+#include <transport-socket/tskt_client.h>
+#include <transport-socket/tskt_resolv.h>
+#include <transport-tls/ttls.h>
+
 
 #define RTSP_CLIENT_DEFAULT_SOFTWARE_NAME "librtsp_client"
 #define RTSP_CLIENT_SESSION_ID_LENGTH 8
 #define RTSP_CLIENT_MAX_FAILED_REQUESTS 5
 #define RTSP_CLIENT_MAX_FAILED_KEEP_ALIVE 3
+#define RTSP_CLIENT_RESOLV_TIMEOUT_MS 5000
 
 
 enum rtsp_client_state {
@@ -59,6 +69,7 @@ struct rtsp_client_session_media {
 	struct rtsp_client_session *session;
 	char *path;
 	void *userdata;
+	struct rtsp_channel_pair channel_pair;
 
 	struct list_node node;
 };
@@ -84,16 +95,39 @@ struct rtsp_client_session {
 
 struct rtsp_client {
 	struct pomp_loop *loop;
-	struct pomp_ctx *ctx;
+	struct tskt_client *tclient;
+	struct tskt_socket *sock;
+	struct {
+		size_t txbuf_size;
+		size_t rxbuf_size;
+		uint32_t class_selector;
+	} sock_params;
 	struct rtsp_client_cbs cbs;
 	void *cbs_userdata;
 	char *software_name;
-	uint16_t port;
+	struct rtsp_authorization_header *auth;
+	struct rtsp_authorization_header *server_auth;
+	bool channel_used[UINT8_MAX + 1];
+
+	struct {
+		struct rtsp_url *url;
+		/* e.g.: 'rtsp://127.0.0.1:8555/stream' */
+		char *url_str;
+	} remote;
+
+	struct {
+		struct tskt_resolv *resolv;
+		int req_id;
+		struct pomp_timer *timer;
+	} resolv;
+
+	/* RTSPS */
+	bool secure;
+	bool ttls_init;
+	SSL_CTX *ssl_ctx;
 
 	/* States */
 	enum rtsp_client_conn_state conn_state;
-	char *addr;
-	struct sockaddr_in remote_addr_in;
 	unsigned int cseq;
 	uint32_t methods_allowed;
 	struct list_node sessions;
@@ -132,28 +166,51 @@ int rtsp_client_remove_session_internal(struct rtsp_client *client,
 void rtsp_client_remove_all_sessions(struct rtsp_client *client);
 
 
-struct rtsp_client_session *rtsp_client_session_find(struct rtsp_client *client,
-						     const char *session_id);
+struct rtsp_client_session *
+rtsp_client_session_find(const struct rtsp_client *client,
+			 const char *session_id);
 
 
 struct rtsp_client_session_media *
-rtsp_client_session_media_add(struct rtsp_client *client,
+rtsp_client_session_media_add(const struct rtsp_client *client,
 			      struct rtsp_client_session *session,
-			      const char *path);
+			      const char *path,
+			      const struct rtsp_channel_pair *channel_pair);
 
 
-int rtsp_client_session_media_remove(struct rtsp_client *client,
+int rtsp_client_session_media_remove(const struct rtsp_client *client,
 				     struct rtsp_client_session *session,
 				     struct rtsp_client_session_media *media);
 
 
 struct rtsp_client_session_media *
-rtsp_client_session_media_find(struct rtsp_client *client,
-			       struct rtsp_client_session *session,
+rtsp_client_session_media_find(const struct rtsp_client *client,
+			       const struct rtsp_client_session *session,
 			       const char *path);
 
 
 void rtsp_client_pomp_timer_cb(struct pomp_timer *timer, void *userdata);
+
+
+static inline bool is_channel_pair_valid(const struct rtsp_channel_pair *pair)
+{
+	if (!pair)
+		return false;
+	return (pair->rtp != pair->rtcp);
+}
+
+
+static inline void set_channel_pair_used(bool *channel_used,
+					 const struct rtsp_channel_pair *pair,
+					 bool used)
+{
+	if (!pair)
+		return;
+	if (!is_channel_pair_valid(pair))
+		return;
+	channel_used[pair->rtp] = used;
+	channel_used[pair->rtcp] = used;
+}
 
 
 #endif /* !_RTSP_CLIENT_PRIV_H_ */

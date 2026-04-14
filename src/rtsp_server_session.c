@@ -37,7 +37,8 @@ struct rtsp_server_session *rtsp_server_session_add(struct rtsp_server *server,
 {
 	int ret;
 	int found;
-	struct rtsp_server_session *session = NULL, *_session = NULL;
+	struct rtsp_server_session *session = NULL;
+	const struct rtsp_server_session *_session = NULL;
 
 	ULOG_ERRNO_RETURN_VAL_IF(server == NULL, EINVAL, NULL);
 
@@ -119,9 +120,11 @@ error:
 int rtsp_server_session_remove(struct rtsp_server *server,
 			       struct rtsp_server_session *session)
 {
-	int found = 0, ret;
-	struct rtsp_server_session *_session = NULL;
-	struct rtsp_server_session_media *media = NULL, *tmp_media = NULL;
+	int found = 0;
+	int ret;
+	const struct rtsp_server_session *_session = NULL;
+	struct rtsp_server_session_media *media = NULL;
+	struct rtsp_server_session_media *tmp_media = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session == NULL, EINVAL);
@@ -189,8 +192,9 @@ int rtsp_server_session_reset_timeout(struct rtsp_server_session *session)
 }
 
 
-struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
-						     const char *session_id)
+struct rtsp_server_session *
+rtsp_server_session_find(const struct rtsp_server *server,
+			 const char *session_id)
 {
 	int found = 0;
 	struct rtsp_server_session *session = NULL;
@@ -209,17 +213,18 @@ struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
 		}
 	}
 
-	return (found) ? session : NULL;
+	return found ? session : NULL;
 }
 
 
 struct rtsp_server_session_media *
-rtsp_server_session_media_add(struct rtsp_server *server,
+rtsp_server_session_media_add(const struct rtsp_server *server,
 			      struct rtsp_server_session *session,
 			      const char *uri,
 			      const char *path)
 {
-	struct rtsp_server_session_media *media = NULL, *_media;
+	struct rtsp_server_session_media *media = NULL;
+	const struct rtsp_server_session_media *_media;
 
 	ULOG_ERRNO_RETURN_VAL_IF(server == NULL, EINVAL, NULL);
 	ULOG_ERRNO_RETURN_VAL_IF(session == NULL, EINVAL, NULL);
@@ -245,12 +250,12 @@ rtsp_server_session_media_add(struct rtsp_server *server,
 }
 
 
-int rtsp_server_session_media_remove(struct rtsp_server *server,
+int rtsp_server_session_media_remove(const struct rtsp_server *server,
 				     struct rtsp_server_session *session,
 				     struct rtsp_server_session_media *media)
 {
 	int found = 0;
-	struct rtsp_server_session_media *_media = NULL;
+	const struct rtsp_server_session_media *_media = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session == NULL, EINVAL);
@@ -286,8 +291,8 @@ int rtsp_server_session_media_remove(struct rtsp_server *server,
 
 
 struct rtsp_server_session_media *
-rtsp_server_session_media_find(struct rtsp_server *server,
-			       struct rtsp_server_session *session,
+rtsp_server_session_media_find(const struct rtsp_server *server,
+			       const struct rtsp_server_session *session,
 			       const char *path)
 {
 	int found = 0;
@@ -305,5 +310,5 @@ rtsp_server_session_media_find(struct rtsp_server *server,
 		}
 	}
 
-	return (found) ? media : NULL;
+	return found ? media : NULL;
 }

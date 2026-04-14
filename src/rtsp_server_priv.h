@@ -140,25 +140,26 @@ void rtsp_server_session_remove_idle(void *userdata);
 int rtsp_server_session_reset_timeout(struct rtsp_server_session *session);
 
 
-struct rtsp_server_session *rtsp_server_session_find(struct rtsp_server *server,
-						     const char *session_id);
+struct rtsp_server_session *
+rtsp_server_session_find(const struct rtsp_server *server,
+			 const char *session_id);
 
 
 struct rtsp_server_session_media *
-rtsp_server_session_media_add(struct rtsp_server *server,
+rtsp_server_session_media_add(const struct rtsp_server *server,
 			      struct rtsp_server_session *session,
 			      const char *uri,
 			      const char *path);
 
 
-int rtsp_server_session_media_remove(struct rtsp_server *server,
+int rtsp_server_session_media_remove(const struct rtsp_server *server,
 				     struct rtsp_server_session *session,
 				     struct rtsp_server_session_media *media);
 
 
 struct rtsp_server_session_media *
-rtsp_server_session_media_find(struct rtsp_server *server,
-			       struct rtsp_server_session *session,
+rtsp_server_session_media_find(const struct rtsp_server *server,
+			       const struct rtsp_server_session *session,
 			       const char *path);
 
 
@@ -174,18 +175,18 @@ int rtsp_server_pending_request_remove(
 
 
 int rtsp_server_pending_request_find(
-	struct rtsp_server *server,
-	struct rtsp_server_pending_request *request);
+	const struct rtsp_server *server,
+	const struct rtsp_server_pending_request *request);
 
 
 struct rtsp_server_pending_request_media *rtsp_server_pending_request_media_add(
-	struct rtsp_server *server,
+	const struct rtsp_server *server,
 	struct rtsp_server_pending_request *request,
 	struct rtsp_server_session_media *media);
 
 
 int rtsp_server_pending_request_media_remove(
-	struct rtsp_server *server,
+	const struct rtsp_server *server,
 	struct rtsp_server_pending_request *request,
 	struct rtsp_server_pending_request_media *media);
 

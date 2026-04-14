@@ -42,6 +42,8 @@ extern "C" {
 /* clang-format off */
 #define RTSP_HEADER_ACCEPT		"Accept"		/* opt. */
 #define RTSP_HEADER_ALLOW		"Allow"			/* opt. */
+#define RTSP_HEADER_AUTHENTICATE	"WWW-Authenticate"	/* opt. */
+#define RTSP_HEADER_AUTHORIZATION	"Authorization"		/* opt. */
 #define RTSP_HEADER_CONNECTION		"Connection"		/* TODO */
 #define RTSP_HEADER_CONTENT_BASE	"Content-Base"		/* opt. */
 #define RTSP_HEADER_CONTENT_ENCODING	"Content-Encoding"
@@ -51,18 +53,18 @@ extern "C" {
 #define RTSP_HEADER_CONTENT_TYPE	"Content-Type"
 #define RTSP_HEADER_CSEQ		"CSeq"
 #define RTSP_HEADER_DATE		"Date"			/* opt. */
+#define RTSP_HEADER_EXT			"X-"			/* opt. */
 #define RTSP_HEADER_PROXY_REQUIRE	"Proxy-Require"		/* TODO */
 #define RTSP_HEADER_PUBLIC		"Public"		/* opt. */
 #define RTSP_HEADER_RANGE		"Range"			/* opt. */
 #define RTSP_HEADER_REQUIRE		"Require"		/* TODO */
 #define RTSP_HEADER_RTP_INFO		"RTP-Info"
-#define RTSP_HEADER_SESSION		"Session"
 #define RTSP_HEADER_SCALE		"Scale"			/* opt. */
 #define RTSP_HEADER_SERVER		"Server"		/* opt. */
+#define RTSP_HEADER_SESSION		"Session"
 #define RTSP_HEADER_TRANSPORT		"Transport"
 #define RTSP_HEADER_UNSUPPORTED		"Unsupported"		/* TODO */
 #define RTSP_HEADER_USER_AGENT		"User-Agent"		/* opt. */
-#define RTSP_HEADER_EXT			"X-"			/* opt. */
 /* clang-format on */
 
 #define RTSP_SESSION_TIMEOUT "timeout"
@@ -130,7 +132,7 @@ struct rtsp_rtp_info_header {
 #define RTSP_TRANSPORT_MODE_PLAY	"PLAY"
 #define RTSP_TRANSPORT_MODE_RECORD	"RECORD"
 #define RTSP_TRANSPORT_APPEND		"append"
-#define RTSP_TRANSPORT_INTERLEAVED	"interleaved"	/* not supported */
+#define RTSP_TRANSPORT_INTERLEAVED	"interleaved"
 #define RTSP_TRANSPORT_TTL		"ttl"
 #define RTSP_TRANSPORT_PORT		"port"
 #define RTSP_TRANSPORT_CLIENT_PORT	"client_port"
@@ -138,16 +140,42 @@ struct rtsp_rtp_info_header {
 #define RTSP_TRANSPORT_SSRC		"ssrc"
 /* clang-format on */
 
-enum rtsp_transport_method {
-	RTSP_TRANSPORT_METHOD_UNKNOWN = 0,
-	RTSP_TRANSPORT_METHOD_PLAY,
-	RTSP_TRANSPORT_METHOD_RECORD,
+
+/* clang-format off */
+#define RTSP_KEY_AUTH_BASIC		"Basic"
+#define RTSP_KEY_AUTH_DIGEST		"Digest"
+#define RTSP_KEY_AUTH_USERNAME		"username"
+#define RTSP_KEY_AUTH_REALM		"realm"
+#define RTSP_KEY_AUTH_NONCE		"nonce"
+#define RTSP_KEY_AUTH_URI		"uri"
+#define RTSP_KEY_AUTH_RESPONSE		"response"
+#define RTSP_KEY_AUTH_ALGO		"algorithm"
+#define RTSP_KEY_AUTH_ALGO_MD5		"MD5"
+#define RTSP_KEY_AUTH_ALGO_MD5_SESS	"MD5-sess"
+#define RTSP_KEY_AUTH_OPAQUE		"qop"
+#define RTSP_KEY_AUTH_QOP_AUTH		"auth"
+#define RTSP_KEY_AUTH_QOP_AUTH_INT	"auth-int"
+#define RTSP_KEY_AUTH_QOP		"qop"
+#define RTSP_KEY_AUTH_NC		"nc"
+#define RTSP_KEY_AUTH_CNOUNCE		"cnonce"
+/* clang-format on */
+
+
+#define RTSP_MAX_INTERLEAVED_MEDIA 10
+
+
+struct rtsp_channel_pair {
+	uint8_t rtp;
+	uint8_t rtcp;
 };
+
 
 struct rtsp_transport_header {
 	char *transport_protocol;
 	char *transport_profile;
 	enum rtsp_lower_transport lower_transport;
+	struct rtsp_channel_pair interleaved[RTSP_MAX_INTERLEAVED_MEDIA];
+	unsigned int interleaved_count;
 	enum rtsp_delivery delivery;
 	char *destination;
 	char *source;
@@ -161,6 +189,71 @@ struct rtsp_transport_header {
 	uint16_t dst_control_port;
 	int ssrc_valid;
 	uint32_t ssrc;
+};
+
+
+/**
+ * Authorization definitions
+ */
+enum rtsp_auth_type {
+	RTSP_AUTH_TYPE_UNKNOWN = 0,
+	RTSP_AUTH_TYPE_BASIC,
+	RTSP_AUTH_TYPE_DIGEST,
+};
+
+
+RTSP_API const char *rtsp_auth_type_str(enum rtsp_auth_type val);
+
+
+RTSP_API enum rtsp_auth_type rtsp_auth_type_from_str(const char *str);
+
+
+enum rtsp_auth_algorithm {
+	RTSP_AUTH_ALGORITHM_UNKNOWN = 0,
+	RTSP_AUTH_ALGORITHM_UNSPECIFIED,
+	RTSP_AUTH_ALGORITHM_MD5,
+	RTSP_AUTH_ALGORITHM_MD5_SESS,
+};
+
+
+RTSP_API const char *rtsp_auth_algorithm_str(enum rtsp_auth_algorithm val);
+
+
+RTSP_API enum rtsp_auth_algorithm rtsp_auth_algorithm_from_str(const char *str);
+
+
+enum rtsp_auth_qop {
+	RTSP_AUTH_QOP_UNKNOWN = 0,
+	RTSP_AUTH_QOP_UNSPECIFIED,
+	RTSP_AUTH_QOP_AUTH,
+	RTSP_AUTH_QOP_AUTH_INT
+};
+
+
+RTSP_API const char *rtsp_auth_qop_str(enum rtsp_auth_qop val);
+
+
+RTSP_API enum rtsp_auth_qop rtsp_auth_qop_from_str(const char *str);
+
+
+struct rtsp_authorization_header {
+	/* Shared fields */
+	enum rtsp_auth_type type; /* Basic or Digest */
+	enum rtsp_auth_algorithm algorithm;
+
+	/* Client-provided */
+	char *username;
+	char *uri;
+	char *response;
+	char *cnonce;
+	unsigned int nc;
+	char *credentials; /* Base64 for Basic, NULL if Digest */
+
+	/* Server-provided */
+	char *realm;
+	char *nonce;
+	char *opaque;
+	enum rtsp_auth_qop qop;
 };
 
 
@@ -193,6 +286,7 @@ struct rtsp_request_header {
 	unsigned int session_timeout;
 	struct rtsp_transport_header *transport[RTSP_TRANSPORT_MAX_COUNT];
 	unsigned int transport_count;
+	struct rtsp_authorization_header *authorization;
 	char *content_type;
 	float scale;
 
@@ -331,6 +425,7 @@ struct rtsp_response_header {
 	char *session_id;
 	unsigned int session_timeout;
 	struct rtsp_transport_header *transport;
+	struct rtsp_authorization_header *authenticate;
 	char *content_type;
 	float scale;
 
@@ -355,6 +450,13 @@ struct rtsp_response_header {
 };
 
 
+struct rtsp_interleaved_info {
+	uint8_t channel;
+	const uint8_t *data;
+	uint16_t len;
+};
+
+
 /**
  * RTSP message
  */
@@ -363,18 +465,23 @@ enum rtsp_message_type {
 	RTSP_MESSAGE_TYPE_UNKNOWN = 0,
 	RTSP_MESSAGE_TYPE_REQUEST,
 	RTSP_MESSAGE_TYPE_RESPONSE,
+	RTSP_MESSAGE_TYPE_INTERLEAVED,
 };
 
 struct rtsp_message {
+	enum rtsp_message_type type;
+	size_t total_len;
 	union {
 		struct rtsp_request_header req;
 		struct rtsp_response_header resp;
 	} header;
-	enum rtsp_message_type type;
 
+	/* Only for RTSP_REQUEST / RTSP_RESPONSE */
 	char *body;
 	size_t body_len;
-	size_t total_len;
+
+	/* Only for INTERLEAVED */
+	struct rtsp_interleaved_info interleaved;
 };
 
 struct rtsp_message_parser_ctx {
@@ -390,9 +497,13 @@ struct rtsp_string {
 };
 
 
-RTSP_API int rtsp_get_next_message(struct pomp_buffer *data,
+RTSP_API int rtsp_get_next_message(const struct pomp_buffer *data,
 				   struct rtsp_message *msg,
 				   struct rtsp_message_parser_ctx *ctx);
+
+
+RTSP_API int rtsp_build_interleaved(const struct rtsp_interleaved_info *info,
+				    struct pomp_buffer **ret_obj);
 
 
 RTSP_API void rtsp_buffer_remove_first_bytes(struct pomp_buffer *buffer,

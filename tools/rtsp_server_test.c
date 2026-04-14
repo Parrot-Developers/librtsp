@@ -32,14 +32,15 @@
 #include <string.h>
 #include <unistd.h>
 
-#define ULOG_TAG rtsp_server_test
-#include <ulog.h>
-ULOG_DECLARE_TAG(rtsp_server_test);
-
 #include <futils/random.h>
 #include <libpomp.h>
 #include <libsdp.h>
 #include <rtsp/server.h>
+
+#define ULOG_TAG rtsp_server_test
+#include <ulog.h>
+ULOG_DECLARE_TAG(rtsp_server_test);
+
 
 /* Win32 stubs */
 #ifdef _WIN32
@@ -53,6 +54,9 @@ static inline const char *strsignal(int signum)
 #define RESOURCE_PATH "live"
 #define MEDIA1_PATH "stream=0"
 #define MEDIA2_PATH "stream=1"
+
+
+#define UNUSED(x) (void)(x)
 
 
 static const struct rtsp_header_ext header_ext[] = {
@@ -80,6 +84,8 @@ static void sighandler(int signum)
 
 static void socket_cb(int fd, void *userdata)
 {
+	UNUSED(userdata);
+
 	ULOGI("socket_cb called with fd=%d", fd);
 }
 
@@ -92,9 +98,14 @@ static void describe_cb(struct rtsp_server *server,
 			void *request_ctx,
 			void *userdata)
 {
-	int ret = 0, err;
+	UNUSED(ext);
+	UNUSED(ext_count);
+
+	int ret = 0;
+	int err;
 	struct sdp_session *session = NULL;
-	struct sdp_media *media1 = NULL, *media2 = NULL;
+	struct sdp_media *media1 = NULL;
+	struct sdp_media *media2 = NULL;
 	char *sdp = NULL;
 
 	if ((server_address == NULL) || (server_address[0] == '\0')) {
@@ -187,7 +198,12 @@ static void setup_cb(struct rtsp_server *server,
 		     uint16_t dst_control_port,
 		     void *userdata)
 {
-	int ret = 0, err;
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
+	int ret = 0;
+	int err;
 	uint32_t ssrc32 = 0;
 
 	if ((path == NULL) || (path[0] == '\0')) {
@@ -267,7 +283,12 @@ static void play_cb(struct rtsp_server *server,
 		    void *stream_userdata,
 		    void *userdata)
 {
-	int ret = 0, err;
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
+	int ret = 0;
+	int err;
 	struct rtsp_range _range;
 	uint16_t seq16 = 0;
 	uint32_t time32 = 0;
@@ -338,7 +359,12 @@ static void pause_cb(struct rtsp_server *server,
 		     void *stream_userdata,
 		     void *userdata)
 {
-	int ret = 0, err;
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
+	int ret = 0;
+	int err;
 	struct rtsp_range _range;
 
 	if ((session_id == NULL) || (session_id[0] == '\0')) {
@@ -378,7 +404,14 @@ static void teardown_cb(struct rtsp_server *server,
 			void *stream_userdata,
 			void *userdata)
 {
-	int ret = 0, err;
+	UNUSED(path);
+	UNUSED(reason);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
+	int ret = 0;
+	int err;
 
 	if ((session_id == NULL) || (session_id[0] == '\0')) {
 		ULOGE("%s: invalid session id", __func__);
@@ -406,6 +439,11 @@ static void request_timeout_cb(struct rtsp_server *server,
 			       enum rtsp_method_type method,
 			       void *userdata)
 {
+	UNUSED(server);
+	UNUSED(request_ctx);
+	UNUSED(method);
+	UNUSED(userdata);
+
 	ULOGI("%s", __func__);
 	return;
 }
@@ -440,7 +478,8 @@ static void usage(char *prog_name)
 
 int main(int argc, char **argv)
 {
-	int status = EXIT_SUCCESS, err;
+	int status = EXIT_SUCCESS;
+	int err;
 	uint16_t port = 0;
 
 	s_stopping = 0;

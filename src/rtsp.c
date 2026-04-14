@@ -27,6 +27,8 @@
 
 #include "rtsp_priv.h"
 
+#include <ctype.h>
+
 #define ULOG_TAG rtsp
 #include <ulog.h>
 ULOG_DECLARE_TAG(rtsp);
@@ -303,75 +305,33 @@ const char *rtsp_client_req_status_str(enum rtsp_client_req_status val)
 }
 
 
-int rtsp_url_parse(char *url, char **host, uint16_t *port, char **path)
-{
-	uint16_t _port = RTSP_DEFAULT_PORT;
-	char *_host = NULL, *_path = NULL, *temp = NULL, *p, *p2;
-
-	ULOG_ERRNO_RETURN_ERR_IF(url == NULL, EINVAL);
-	ULOG_ERRNO_RETURN_ERR_IF(url[0] == '\0', EINVAL);
-
-	if (strncmp(url, RTSP_SCHEME_TCP, strlen(RTSP_SCHEME_TCP)) != 0) {
-		ULOGE("invalid URL scheme: '%s'", url);
-		return -EINVAL;
-	}
-
-	_host = url + strlen(RTSP_SCHEME_TCP);
-	if (_host[0] == '\0') {
-		ULOGE("invalid URL: '%s'", url);
-		return -EINVAL;
-	}
-
-	p = strtok_r(_host, "/", &temp);
-	if (p == NULL) {
-		ULOGE("invalid URL: '%s'", url);
-		return -EINVAL;
-	}
-
-	/* Host */
-	p2 = strchr(p, ':');
-	if (p2) {
-		/* Port */
-		_port = atoi(p2 + 1);
-		*p2 = '\0';
-	}
-
-	/* Absolute path, can be NULL */
-	_path = strtok_r(NULL, "", &temp);
-
-	if (host)
-		*host = _host;
-	if (port)
-		*port = _port;
-	if (path)
-		*path = _path;
-
-	return 0;
-}
-
-
 static char *rtsp_strnstr(const char *s, const char *find, size_t slen)
 {
-	char c, sc;
+	char c;
+	char sc;
 	size_t len;
 
 	c = *find;
-	if (c != '\0') {
-		find++;
-		len = strlen(find);
-		do {
-			do {
-				sc = *s++;
-				if (slen-- < 1 || sc == '\0')
-					return NULL;
-			} while (sc != c);
-			if (len > slen)
-				return NULL;
-		} while (strncmp(s, find, len) != 0);
-		s--;
-		c = *find;
+	if (c == '\0')
+		return (char *)s;
+
+	find++;
+	len = strnlen(find, slen);
+	if (len >= slen)
+		return NULL;
+
+	while (slen > len) {
+		sc = *s++;
+		slen--;
+
+		if ((sc == c) && (strncmp(s, find, len) == 0))
+			return (char *)(s - 1);
+
+		if (sc == '\0')
+			break;
 	}
-	return (char *)s;
+
+	return NULL;
 }
 
 
@@ -426,7 +386,8 @@ static int rtsp_time_write(const struct rtsp_time *time,
 				   RTSP_TIME_NPT_NOW);
 		} else {
 			ULOG_ERRNO_RETURN_ERR_IF(time->npt.infinity, EINVAL);
-			unsigned int hrs, min;
+			unsigned int hrs;
+			unsigned int min;
 			unsigned int sec =
 				time->npt.sec + time->npt.usec / 1000000;
 			hrs = sec / (60 * 60);
@@ -477,7 +438,7 @@ static int rtsp_time_write(const struct rtsp_time *time,
 }
 
 
-static int rtsp_time_read(char *str, struct rtsp_time *time)
+static int rtsp_time_read(const char *str, struct rtsp_time *time)
 {
 	char *s;
 
@@ -489,13 +450,13 @@ static int rtsp_time_read(char *str, struct rtsp_time *time)
 		s = strchr(str, ':');
 		if (s != NULL) {
 			/* Hours, minutes, seconds */
-			char *hrs_str = str;
+			const char *hrs_str = str;
 			*s = '\0';
-			char *min_str = s + 1;
+			const char *min_str = s + 1;
 			s = strchr(min_str, ':');
 			ULOG_ERRNO_RETURN_ERR_IF(s == NULL, EINVAL);
 			*s = '\0';
-			char *sec_str = s + 1;
+			const char *sec_str = s + 1;
 			unsigned int hrs = atoi(hrs_str);
 			unsigned int min = atoi(min_str);
 			float sec_f = atof(sec_str);
@@ -639,7 +600,6 @@ static int rtsp_methods_write(uint32_t methods, struct rtsp_string *str)
 			   str,
 			   "%s" RTSP_METHOD_RECORD,
 			   (first) ? "" : ",");
-		first = 0;
 	}
 
 	return ret;
@@ -648,7 +608,8 @@ static int rtsp_methods_write(uint32_t methods, struct rtsp_string *str)
 
 static int rtsp_methods_read(char *str, uint32_t *methods)
 {
-	char *method, *temp;
+	const char *method;
+	char *temp;
 	uint32_t _methods = 0;
 
 	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
@@ -849,8 +810,13 @@ int rtsp_range_header_read(char *str, struct rtsp_range *range)
 	ULOG_ERRNO_RETURN_ERR_IF(range == NULL, EINVAL);
 
 	char *s;
-	char *start_str = NULL, *stop_str = NULL, *time_str = NULL;
+	const char *start_str = NULL;
+	const char *stop_str = NULL;
+	const char *time_str = NULL;
 	int ret;
+
+	if (strnlen(str, PATH_MAX) >= PATH_MAX)
+		return -ENAMETOOLONG;
 
 	memset(range, 0, sizeof(*range));
 	range->time = 0;
@@ -879,7 +845,7 @@ int rtsp_range_header_read(char *str, struct rtsp_range *range)
 	if (strcmp(str, RTSP_TIME_NPT) == 0) {
 		/* Normal Play Time (NPT) */
 		range->start.format = RTSP_TIME_FORMAT_NPT;
-		if (strlen(start_str)) {
+		if (start_str[0] != '\0') {
 			ret = rtsp_time_read(start_str, &range->start);
 			if (ret < 0)
 				return ret;
@@ -888,7 +854,7 @@ int rtsp_range_header_read(char *str, struct rtsp_range *range)
 		}
 		if (stop_str != NULL) {
 			range->stop.format = RTSP_TIME_FORMAT_NPT;
-			if (strlen(stop_str)) {
+			if (stop_str[0] != '\0') {
 				ret = rtsp_time_read(stop_str, &range->stop);
 				if (ret < 0)
 					return ret;
@@ -934,7 +900,7 @@ int rtsp_range_header_read(char *str, struct rtsp_range *range)
 	}
 
 	/* 'time' */
-	if ((time_str) &&
+	if (time_str &&
 	    (strncmp(time_str, RTSP_RANGE_TIME, strlen(RTSP_RANGE_TIME)) ==
 	     0)) {
 		uint64_t epoch_sec = 0;
@@ -997,7 +963,7 @@ int rtsp_session_header_write(char *session_id,
  * RTSP Session header
  * see RFC 2326 chapter 12.37
  */
-int rtsp_session_header_read(char *str,
+int rtsp_session_header_read(const char *str,
 			     char **session_id,
 			     unsigned int *session_timeout)
 {
@@ -1006,17 +972,17 @@ int rtsp_session_header_read(char *str,
 	ULOG_ERRNO_RETURN_ERR_IF(session_timeout == NULL, EINVAL);
 
 	char *p3 = strchr(str, ';');
-	char *timeout_str = NULL;
+	const char *timeout_str = NULL;
 
 	*session_timeout = 0;
 	if (p3) {
 		timeout_str = p3 + 1;
 		*p3 = '\0';
 	}
-	if ((timeout_str) && (strncmp(timeout_str,
-				      RTSP_SESSION_TIMEOUT,
-				      strlen(RTSP_SESSION_TIMEOUT)) == 0)) {
-		char *p4 = strchr(timeout_str, '=');
+	if (timeout_str && (strncmp(timeout_str,
+				    RTSP_SESSION_TIMEOUT,
+				    strlen(RTSP_SESSION_TIMEOUT)) == 0)) {
+		const char *p4 = strchr(timeout_str, '=');
 		if (p4)
 			*session_timeout = atoi(p4 + 1);
 	}
@@ -1085,7 +1051,6 @@ int rtsp_rtp_info_header_write(struct rtsp_rtp_info_header *const *rtp_info,
 			       struct rtsp_string *str)
 {
 	int ret = 0;
-	unsigned int i;
 	const struct rtsp_rtp_info_header *rtpi;
 
 	ULOG_ERRNO_RETURN_ERR_IF(rtp_info == NULL, EINVAL);
@@ -1096,7 +1061,7 @@ int rtsp_rtp_info_header_write(struct rtsp_rtp_info_header *const *rtp_info,
 		rtsp_sprintf, ret, return ret, str, RTSP_HEADER_RTP_INFO ": ");
 
 	/* Loop on RTP info */
-	for (i = 0; i < count; i++) {
+	for (unsigned int i = 0; i < count; i++) {
 		rtpi = rtp_info[i];
 		if (rtpi == NULL) {
 			ULOGW("%s: invalid pointer", __func__);
@@ -1158,8 +1123,13 @@ int rtsp_rtp_info_header_read(char *str,
 	int ret = 0;
 	unsigned int _count = 0;
 	struct rtsp_rtp_info_header *rtpi;
-	char *rtpi_str, *param, *temp, *temp2, *temp3;
-	char *key, *val;
+	const char *rtpi_str;
+	char *param;
+	char *temp;
+	char *temp2;
+	char *temp3;
+	const char *key;
+	char *val;
 
 	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(rtp_info == NULL, EINVAL);
@@ -1168,7 +1138,7 @@ int rtsp_rtp_info_header_read(char *str,
 
 	/* Loop on RTP info */
 	rtpi_str = strtok_r(str, ",", &temp);
-	while ((rtpi_str) && (_count < max_count)) {
+	while (rtpi_str && (_count < max_count)) {
 		param = strtok_r(str, ";", &temp2);
 
 		if (param == NULL) {
@@ -1206,14 +1176,13 @@ int rtsp_rtp_info_header_read(char *str,
 				goto exit;
 			}
 			/* 'seq' */
-			if ((strcmp(key, RTSP_RTP_INFO_SEQ) == 0) && (val)) {
+			if ((strcmp(key, RTSP_RTP_INFO_SEQ) == 0) && val) {
 				rtpi->seq = atoi(val);
 				rtpi->seq_valid = 1;
 			}
 
 			/* 'rtptime' */
-			if ((strcmp(key, RTSP_RTP_INFO_RTPTIME) == 0) &&
-			    (val)) {
+			if ((strcmp(key, RTSP_RTP_INFO_RTPTIME) == 0) && val) {
 				char *endptr = NULL;
 				errno = 0;
 				uint32_t parsedint = strtoul(val, &endptr, 10);
@@ -1293,6 +1262,10 @@ int rtsp_transport_header_copy(const struct rtsp_transport_header *src,
 	dst->transport_protocol = xstrdup(src->transport_protocol);
 	dst->transport_profile = xstrdup(src->transport_profile);
 	dst->lower_transport = src->lower_transport;
+	dst->interleaved_count = src->interleaved_count;
+	memcpy(dst->interleaved,
+	       src->interleaved,
+	       src->interleaved_count * sizeof(src->interleaved[0]));
 	dst->delivery = src->delivery;
 	dst->destination = xstrdup(src->destination);
 	dst->source = xstrdup(src->source);
@@ -1320,7 +1293,6 @@ int rtsp_transport_header_write(struct rtsp_transport_header *const *transport,
 				struct rtsp_string *str)
 {
 	int ret = 0;
-	unsigned int i;
 	const char *lower_transport;
 	const struct rtsp_transport_header *trsp;
 
@@ -1332,7 +1304,7 @@ int rtsp_transport_header_write(struct rtsp_transport_header *const *transport,
 		rtsp_sprintf, ret, return ret, str, RTSP_HEADER_TRANSPORT ": ");
 
 	/* Loop on transports */
-	for (i = 0; i < count; i++) {
+	for (unsigned int i = 0; i < count; i++) {
 		trsp = transport[i];
 		if (trsp == NULL) {
 			ULOGW("%s: invalid pointer", __func__);
@@ -1469,6 +1441,33 @@ int rtsp_transport_header_write(struct rtsp_transport_header *const *transport,
 			}
 		}
 
+		/* 'interleaved' */
+		if ((trsp->lower_transport == RTSP_LOWER_TRANSPORT_TCP) &&
+		    (trsp->interleaved_count > 0)) {
+			CHECK_FUNC(rtsp_sprintf,
+				   ret,
+				   return ret,
+				   str,
+				   ";interleaved=");
+			for (unsigned int j = 0; j < trsp->interleaved_count;
+			     j++) {
+				if (j != 0) {
+					CHECK_FUNC(rtsp_sprintf,
+						   ret,
+						   return ret,
+						   str,
+						   ",");
+				}
+				CHECK_FUNC(rtsp_sprintf,
+					   ret,
+					   return ret,
+					   str,
+					   "%u-%u",
+					   trsp->interleaved[j].rtp,
+					   trsp->interleaved[j].rtcp);
+			}
+		}
+
 		/* 'ssrc' */
 		if (trsp->ssrc_valid) {
 			CHECK_FUNC(rtsp_sprintf,
@@ -1506,11 +1505,11 @@ int rtsp_transport_header_write(struct rtsp_transport_header *const *transport,
 /**
  * Process each key/value from header
  */
-static void process_key_val(struct rtsp_transport_header *trsp,
-			    const char *key,
-			    const char *val)
+static void process_transport_key_val(struct rtsp_transport_header *trsp,
+				      const char *key,
+				      char *val)
 {
-	char *val2;
+	const char *val2;
 
 	/* 'unicast' */
 	if (strcmp(key, RTSP_TRANSPORT_UNICAST) == 0) {
@@ -1596,9 +1595,8 @@ static void process_key_val(struct rtsp_transport_header *trsp,
 
 	/* 'ssrc' */
 	if (strcmp(key, RTSP_TRANSPORT_SSRC) == 0) {
-		if (val)
-			if (sscanf(val, "%08X", &trsp->ssrc) == 1)
-				trsp->ssrc_valid = 1;
+		if (val && (sscanf(val, "%08X", &trsp->ssrc) == 1))
+			trsp->ssrc_valid = 1;
 		goto out;
 	}
 
@@ -1621,6 +1619,38 @@ static void process_key_val(struct rtsp_transport_header *trsp,
 		}
 		goto out;
 	}
+
+	/* 'interleaved' */
+	if (strcmp(key, RTSP_TRANSPORT_INTERLEAVED) == 0) {
+		char *pair_str;
+		char *temp;
+		unsigned int int_idx = 0;
+		while ((pair_str = strtok_r(val, ",", &temp)) != NULL) {
+			unsigned int rtp, rtcp;
+			if (int_idx >= RTSP_MAX_INTERLEAVED_MEDIA) {
+				ULOGE("cannot parse interleaved:"
+				      " too many pairs (max %u)",
+				      RTSP_MAX_INTERLEAVED_MEDIA);
+				break;
+			}
+			if (sscanf(pair_str, "%u-%u", &rtp, &rtcp) != 2) {
+				ULOGE("invalid interleaved pair '%s'",
+				      pair_str);
+				break;
+			}
+			trsp->interleaved[int_idx].rtp = rtp;
+			trsp->interleaved[int_idx].rtcp = rtcp;
+			/* TODO REMOVE */
+			ULOGI("header_read: idx=%u: %u, %u",
+			      int_idx,
+			      trsp->interleaved[int_idx].rtp,
+			      trsp->interleaved[int_idx].rtcp);
+			int_idx++;
+			trsp->interleaved_count = int_idx;
+			val = NULL;
+		}
+		goto out;
+	}
 out:
 	return;
 }
@@ -1638,8 +1668,13 @@ int rtsp_transport_header_read(char *str,
 	int ret = 0;
 	unsigned int _count = 0;
 	struct rtsp_transport_header *trsp;
-	char *trsp_str, *param, *temp, *temp2, *temp3;
-	char *key, *val;
+	const char *trsp_str;
+	char *param;
+	char *temp;
+	char *temp2;
+	char *temp3;
+	const char *key;
+	char *val;
 
 	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(transport == NULL, EINVAL);
@@ -1648,7 +1683,7 @@ int rtsp_transport_header_read(char *str,
 
 	/* Loop on transports */
 	trsp_str = strtok_r(str, ",", &temp);
-	while ((trsp_str) && (_count < max_count)) {
+	while (trsp_str && (_count < max_count)) {
 		param = strtok_r(str, ";", &temp2);
 
 		if (param == NULL) {
@@ -1717,7 +1752,7 @@ int rtsp_transport_header_read(char *str,
 			if (key == NULL)
 				ULOGW("no key");
 			else
-				process_key_val(trsp, key, val);
+				process_transport_key_val(trsp, key, val);
 
 			param = strtok_r(NULL, ";", &temp2);
 		}
@@ -1734,25 +1769,443 @@ int rtsp_transport_header_read(char *str,
 
 
 /**
+ * RTSP Authorization header
+ * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
+ */
+struct rtsp_authorization_header *rtsp_authorization_header_new(void)
+{
+	struct rtsp_authorization_header *auth = calloc(1, sizeof(*auth));
+	ULOG_ERRNO_RETURN_VAL_IF(auth == NULL, ENOMEM, NULL);
+
+	auth->algorithm = RTSP_AUTH_ALGORITHM_UNSPECIFIED;
+	auth->qop = RTSP_AUTH_QOP_UNSPECIFIED;
+
+	return auth;
+}
+
+
+/**
+ * RTSP Authorization header
+ * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
+ */
+int rtsp_authorization_header_free(struct rtsp_authorization_header **auth)
+{
+	ULOG_ERRNO_RETURN_ERR_IF(auth == NULL, EINVAL);
+
+	if (*auth != NULL) {
+		xfree((void **)&(*auth)->credentials);
+		xfree((void **)&(*auth)->username);
+		xfree((void **)&(*auth)->realm);
+		xfree((void **)&(*auth)->nonce);
+		xfree((void **)&(*auth)->uri);
+		xfree((void **)&(*auth)->response);
+		xfree((void **)&(*auth)->opaque);
+		xfree((void **)&(*auth)->cnonce);
+	}
+
+	xfree((void **)auth);
+
+	return 0;
+}
+
+
+/**
+ * RTSP Authorization header
+ * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
+ */
+int rtsp_authorization_header_copy(const struct rtsp_authorization_header *src,
+				   struct rtsp_authorization_header *dst)
+{
+	ULOG_ERRNO_RETURN_ERR_IF(src == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(dst == NULL, EINVAL);
+
+	dst->type = src->type;
+	dup_field(&dst->credentials, src->credentials);
+	dup_field(&dst->username, src->username);
+	dup_field(&dst->realm, src->realm);
+	dup_field(&dst->nonce, src->nonce);
+	dup_field(&dst->uri, src->uri);
+	dup_field(&dst->response, src->response);
+	dst->algorithm = src->algorithm;
+	dup_field(&dst->opaque, src->opaque);
+	dst->qop = src->qop;
+	dup_field(&dst->cnonce, src->cnonce);
+	dst->nc = src->nc;
+
+	return 0;
+}
+
+
+/**
+ * Copies only the server-provided fields from src to dst.
+ * Typically used after receiving a WWW-Authenticate header.
+ */
+int rtsp_authorization_header_copy_server_fields(
+	const struct rtsp_authorization_header *src,
+	struct rtsp_authorization_header *dst)
+{
+	ULOG_ERRNO_RETURN_ERR_IF(src == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(dst == NULL, EINVAL);
+
+	/* Only copy fields that the server provides */
+	dst->type = src->type;
+	dup_field(&dst->realm, src->realm);
+	dup_field(&dst->nonce, src->nonce);
+	dup_field(&dst->opaque, src->opaque);
+	dst->algorithm = src->algorithm;
+	dst->qop = src->qop;
+
+	return 0;
+}
+
+
+/**
+ * Copies only the client-provided fields from src to dst.
+ * Typically used when preparing an Authorization header to send.
+ */
+int rtsp_authorization_header_copy_client_fields(
+	const struct rtsp_authorization_header *src,
+	struct rtsp_authorization_header *dst)
+{
+	ULOG_ERRNO_RETURN_ERR_IF(src == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(dst == NULL, EINVAL);
+
+	/* Only copy fields that the client provides */
+	dup_field(&dst->username, src->username);
+	dup_field(&dst->credentials, src->credentials);
+	dup_field(&dst->uri, src->uri);
+	dup_field(&dst->response, src->response);
+	dup_field(&dst->cnonce, src->cnonce);
+	dst->nc = src->nc;
+
+	return 0;
+}
+
+
+#define APPEND_FIELD(name, value)                                              \
+	do {                                                                   \
+		if (value != NULL) {                                           \
+			if (!first)                                            \
+				CHECK_FUNC(rtsp_sprintf,                       \
+					   ret,                                \
+					   return ret,                         \
+					   str,                                \
+					   ", ");                              \
+			CHECK_FUNC(rtsp_sprintf,                               \
+				   ret,                                        \
+				   return ret,                                 \
+				   str,                                        \
+				   name "=\"%s\"",                             \
+				   value);                                     \
+			first = false;                                         \
+		}                                                              \
+	} while (0)
+
+
+/**
+ * RTSP Authorization header
+ * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
+ */
+int rtsp_authorization_header_write(
+	const struct rtsp_authorization_header *auth,
+	struct rtsp_string *str)
+{
+
+	int ret = 0;
+	bool first = true;
+
+	ULOG_ERRNO_RETURN_ERR_IF(auth == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
+
+	CHECK_FUNC(rtsp_sprintf,
+		   ret,
+		   return ret,
+		   str,
+		   RTSP_HEADER_AUTHORIZATION ": ");
+
+	switch (auth->type) {
+	case RTSP_AUTH_TYPE_BASIC: {
+		if ((auth->credentials == NULL) ||
+		    (auth->credentials[0] == '\0')) {
+			ULOGW("%s: invalid credentials", __func__);
+			return -EPROTO;
+		}
+		if (auth->credentials != NULL) {
+			/* 'credentials' */
+			CHECK_FUNC(rtsp_sprintf,
+				   ret,
+				   return ret,
+				   str,
+				   "%s %s",
+				   rtsp_auth_type_str(auth->type),
+				   auth->credentials);
+		}
+		break;
+	}
+	case RTSP_AUTH_TYPE_DIGEST:
+		if ((auth->response == NULL) || (auth->response[0] == '\0')) {
+			ULOGW("%s: invalid response", __func__);
+			/* FIXME return -EPROTO; */
+			return 0;
+		}
+		CHECK_FUNC(rtsp_sprintf,
+			   ret,
+			   return ret,
+			   str,
+			   "%s ",
+			   rtsp_auth_type_str(auth->type));
+		APPEND_FIELD(RTSP_KEY_AUTH_USERNAME, auth->username);
+		APPEND_FIELD(RTSP_KEY_AUTH_REALM, auth->realm);
+		APPEND_FIELD(RTSP_KEY_AUTH_NONCE, auth->nonce);
+		APPEND_FIELD(RTSP_KEY_AUTH_URI, auth->uri);
+		APPEND_FIELD(RTSP_KEY_AUTH_RESPONSE, auth->response);
+		if (auth->algorithm != RTSP_AUTH_ALGORITHM_UNKNOWN &&
+		    auth->algorithm != RTSP_AUTH_ALGORITHM_UNSPECIFIED) {
+			APPEND_FIELD(RTSP_KEY_AUTH_ALGO,
+				     rtsp_auth_algorithm_str(auth->algorithm));
+		}
+		if (auth->opaque != NULL && auth->opaque[0] != '\0')
+			APPEND_FIELD(RTSP_KEY_AUTH_OPAQUE, auth->opaque);
+		if (auth->qop != RTSP_AUTH_QOP_UNKNOWN &&
+		    auth->qop != RTSP_AUTH_QOP_UNSPECIFIED) {
+			APPEND_FIELD(RTSP_KEY_AUTH_QOP,
+				     rtsp_auth_qop_str(auth->qop));
+			APPEND_FIELD(RTSP_KEY_AUTH_CNOUNCE, auth->cnonce);
+			char nc_str[9];
+			int err = rtsp_auth_nc_str(
+				nc_str, sizeof(nc_str), auth->nc);
+			if (err < 0)
+				ULOG_ERRNO("rtsp_auth_nc_str", -err);
+			else
+				APPEND_FIELD(RTSP_KEY_AUTH_NC, nc_str);
+		}
+		break;
+	default:
+		ULOGW("%s: invalid transport protocol", __func__);
+		return -EPROTO;
+	}
+
+	CHECK_FUNC(rtsp_sprintf, ret, return ret, str, RTSP_CRLF);
+
+	return 0;
+}
+
+
+static char *strip_quotes(const char *s)
+{
+	if (!s)
+		return NULL;
+	size_t len = strnlen(s, PATH_MAX);
+	if (len >= PATH_MAX) {
+		ULOGE("string too long or not null-terminated");
+		return NULL;
+	}
+	if ((len >= 2) && (s[0] == '"') && (s[len - 1] == '"')) {
+		char *res = malloc(len - 1);
+		if (!res) {
+			ULOG_ERRNO("malloc", ENOMEM);
+			return NULL;
+		}
+		memcpy(res, s + 1, len - 2);
+		res[len - 2] = '\0';
+		return res;
+	}
+	return xstrdup(s);
+}
+
+
+/**
+ * Process each key/value from authorization header
+ */
+static void
+process_authorization_key_val(struct rtsp_authorization_header *auth,
+			      const char *key,
+			      char *val)
+{
+	/* 'username' */
+	if (strcmp(key, RTSP_KEY_AUTH_USERNAME) == 0) {
+		auth->username = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'realm' */
+	if (strcmp(key, RTSP_KEY_AUTH_REALM) == 0) {
+		auth->realm = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'nounce' */
+	if (strcmp(key, RTSP_KEY_AUTH_NONCE) == 0) {
+		auth->nonce = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'uri' */
+	if (strcmp(key, RTSP_KEY_AUTH_URI) == 0) {
+		auth->uri = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'response' */
+	if (strcmp(key, RTSP_KEY_AUTH_RESPONSE) == 0) {
+		auth->response = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'algorithm' */
+	if (strcmp(key, RTSP_KEY_AUTH_ALGO) == 0) {
+		char *val2 = strip_quotes(val);
+		auth->algorithm = rtsp_auth_algorithm_from_str(val2);
+		free(val2);
+		goto out;
+	}
+
+	/* 'opaque' */
+	if (strcmp(key, RTSP_KEY_AUTH_OPAQUE) == 0) {
+		auth->opaque = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'qop' */
+	if (strcmp(key, RTSP_KEY_AUTH_QOP) == 0) {
+		char *val2 = strip_quotes(val);
+		auth->qop = rtsp_auth_qop_from_str(val2);
+		free(val2);
+		goto out;
+	}
+
+	/* 'cnonce' */
+	if (strcmp(key, RTSP_KEY_AUTH_CNOUNCE) == 0) {
+		auth->cnonce = strip_quotes(val);
+		goto out;
+	}
+
+	/* 'nc' */
+	if (strcmp(key, RTSP_KEY_AUTH_NC) == 0) {
+		char *val2 = strip_quotes(val);
+		char *endptr = NULL;
+		errno = 0;
+		unsigned long parsedlong = strtoul(val2, &endptr, 16);
+		if (errno == ERANGE || parsedlong > UINT_MAX ||
+		    endptr == val2 || *endptr != '\0') {
+			ULOGE("cannot read 'nc':"
+			      " strtoul('%s') failed (errno=%d, endptr='%s')",
+			      val2,
+			      errno,
+			      endptr);
+			free(val2);
+			goto out;
+		}
+		free(val2);
+		auth->nc = (unsigned int)parsedlong;
+		goto out;
+	}
+
+out:
+	return;
+}
+
+
+/**
+ * RTSP Authorization header
+ * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
+ */
+int rtsp_authorization_header_read(char *str,
+				   struct rtsp_authorization_header **auth)
+{
+	int ret = 0;
+	struct rtsp_authorization_header *_auth;
+	char *token = NULL;
+	char *param = NULL;
+	char *temp;
+	char *temp2;
+	char *temp3;
+	const char *key;
+	char *val;
+
+	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(auth == NULL, EINVAL);
+
+	_auth = rtsp_authorization_header_new();
+	if (_auth == NULL) {
+		ret = -ENOMEM;
+		goto error;
+	}
+
+	token = strtok_r(str, " ", &temp);
+	if (!token) {
+		ret = -EPROTO;
+		goto error;
+	}
+
+	/* type */
+	if (strcasecmp(token, rtsp_auth_type_str(RTSP_AUTH_TYPE_BASIC)) == 0) {
+		_auth->type = RTSP_AUTH_TYPE_BASIC;
+
+		/* credentials */
+		param = strtok_r(NULL, " ", &temp);
+		if (!param) {
+			ret = -EPROTO;
+			goto error;
+		}
+		xfree((void **)&_auth->credentials);
+		_auth->credentials = xstrdup(param);
+
+	} else if (strcasecmp(token,
+			      rtsp_auth_type_str(RTSP_AUTH_TYPE_DIGEST)) == 0) {
+		_auth->type = RTSP_AUTH_TYPE_DIGEST;
+		char *rest = temp;
+
+		param = strtok_r(rest, ",", &temp2);
+		while (param) {
+			key = strtok_r(param, "=", &temp3);
+			val = strtok_r(NULL, "", &temp3);
+
+			while (*key == ' ')
+				key++;
+			while (*val == ' ')
+				val++;
+
+			if (key == NULL)
+				ULOGW("no key");
+			else
+				process_authorization_key_val(_auth, key, val);
+
+			param = strtok_r(NULL, ",", &temp2);
+		}
+	} else {
+		ret = -EPROTO;
+		goto error;
+	}
+
+	*auth = _auth;
+	return 0;
+
+error:
+	rtsp_authorization_header_free(&_auth);
+	return ret;
+}
+
+
+/**
  * RTSP Request
  * see RFC 2326 chapter 6
  */
 int rtsp_request_header_clear(struct rtsp_request_header *header)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
 
 	xfree((void **)&header->uri);
 	xfree((void **)&header->session_id);
-	for (i = 0; i < header->transport_count; i++)
+	for (unsigned int i = 0; i < header->transport_count; i++)
 		rtsp_transport_header_free(&header->transport[i]);
+	rtsp_authorization_header_free(&header->authorization);
 	xfree((void **)&header->content_type);
 	xfree((void **)&header->user_agent);
 	xfree((void **)&header->server);
 	xfree((void **)&header->accept);
 
-	for (i = 0; i < header->ext_count; i++) {
+	for (unsigned int i = 0; i < header->ext_count; i++) {
 		xfree((void **)&header->ext[i].key);
 		xfree((void **)&header->ext[i].value);
 	}
@@ -1771,8 +2224,6 @@ int rtsp_request_header_clear(struct rtsp_request_header *header)
 int rtsp_request_header_copy(const struct rtsp_request_header *src,
 			     struct rtsp_request_header *dst)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(src == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(dst == NULL, EINVAL);
 
@@ -1782,7 +2233,7 @@ int rtsp_request_header_copy(const struct rtsp_request_header *src,
 	dst->date = src->date;
 	dst->session_id = xstrdup(src->session_id);
 	dst->session_timeout = src->session_timeout;
-	for (i = 0; i < src->transport_count; i++) {
+	for (unsigned int i = 0; i < src->transport_count; i++) {
 		struct rtsp_transport_header *t = rtsp_transport_header_new();
 		if (t == NULL)
 			return -ENOMEM;
@@ -1792,6 +2243,13 @@ int rtsp_request_header_copy(const struct rtsp_request_header *src,
 	dst->transport_count = src->transport_count;
 	dst->content_type = xstrdup(src->content_type);
 	dst->scale = src->scale;
+	if (src->authorization) {
+		dst->authorization = rtsp_authorization_header_new();
+		if (dst->authorization == NULL)
+			return -ENOMEM;
+		rtsp_authorization_header_copy(src->authorization,
+					       dst->authorization);
+	}
 	dst->user_agent = xstrdup(src->user_agent);
 	dst->server = xstrdup(src->server);
 	dst->accept = xstrdup(src->accept);
@@ -1813,8 +2271,6 @@ int rtsp_request_header_copy_ext(struct rtsp_request_header *header,
 				 const struct rtsp_header_ext *ext,
 				 size_t ext_count)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
 
 	if (ext_count == 0)
@@ -1826,7 +2282,7 @@ int rtsp_request_header_copy_ext(struct rtsp_request_header *header,
 	if (header->ext == NULL)
 		return -ENOMEM;
 	header->ext_count = ext_count;
-	for (i = 0; i < ext_count; i++) {
+	for (unsigned int i = 0; i < ext_count; i++) {
 		header->ext[i].key = xstrdup(ext[i].key);
 		header->ext[i].value = xstrdup(ext[i].value);
 	}
@@ -1905,6 +2361,14 @@ int rtsp_request_header_write(const struct rtsp_request_header *header,
 	if (header->transport_count > 0) {
 		ret = rtsp_transport_header_write(
 			header->transport, header->transport_count, str);
+		if (ret < 0)
+			return ret;
+	}
+
+	/* 'Authorization' */
+	if (header->authorization != NULL) {
+		ret = rtsp_authorization_header_write(header->authorization,
+						      str);
 		if (ret < 0)
 			return ret;
 	}
@@ -2004,9 +2468,13 @@ int rtsp_request_header_read(char *str,
 			     char **body)
 {
 	int ret;
-	char *p, *temp, *temp2;
-	char *method, *uri, *version;
-	size_t nl_len, i;
+	char *p;
+	char *temp;
+	char *temp2;
+	const char *method;
+	const char *uri;
+	const char *version;
+	size_t nl_len;
 
 	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
@@ -2020,7 +2488,7 @@ int rtsp_request_header_read(char *str,
 	if (p) {
 		if (body)
 			*body = p + nl_len;
-		for (i = 0; i < nl_len; i++)
+		for (size_t i = 0; i < nl_len; i++)
 			p[i] = '\0';
 	} else {
 		ULOGE("%s: end of header not found", __func__);
@@ -2057,7 +2525,9 @@ int rtsp_request_header_read(char *str,
 
 	p = strtok_r(NULL, RTSP_CRLF, &temp);
 	while (p) {
-		char *field, *value, *p2;
+		const char *field;
+		char *value;
+		char *p2;
 
 		p2 = strchr(p, ':');
 		if (p2) {
@@ -2123,6 +2593,16 @@ int rtsp_request_header_read(char *str,
 						strlen(RTSP_HEADER_SCALE))) {
 				/* 'Scale' */
 				header->scale = atof(value);
+
+			} else if (!strncasecmp(
+					   field,
+					   RTSP_HEADER_AUTHORIZATION,
+					   strlen(RTSP_HEADER_AUTHORIZATION))) {
+				/* 'Authorization' */
+				ret = rtsp_authorization_header_read(
+					str, &header->authorization);
+				if (ret < 0)
+					return ret;
 
 			} else if (!strncasecmp(
 					   field,
@@ -2193,15 +2673,14 @@ int rtsp_request_header_read(char *str,
  */
 int rtsp_response_header_clear(struct rtsp_response_header *header)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
 
 	xfree((void **)&header->status_string);
 	xfree((void **)&header->session_id);
 	rtsp_transport_header_free(&header->transport);
+	rtsp_authorization_header_free(&header->authenticate);
 	xfree((void **)&header->content_type);
-	for (i = 0; i < header->rtp_info_count; i++)
+	for (unsigned int i = 0; i < header->rtp_info_count; i++)
 		rtsp_rtp_info_header_free(&header->rtp_info[i]);
 	xfree((void **)&header->server);
 	xfree((void **)&header->content_encoding);
@@ -2209,7 +2688,7 @@ int rtsp_response_header_clear(struct rtsp_response_header *header)
 	xfree((void **)&header->content_base);
 	xfree((void **)&header->content_location);
 
-	for (i = 0; i < header->ext_count; i++) {
+	for (unsigned int i = 0; i < header->ext_count; i++) {
 		xfree((void **)&header->ext[i].key);
 		xfree((void **)&header->ext[i].value);
 	}
@@ -2228,8 +2707,6 @@ int rtsp_response_header_clear(struct rtsp_response_header *header)
 int rtsp_response_header_copy(const struct rtsp_response_header *src,
 			      struct rtsp_response_header *dst)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(src == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(dst == NULL, EINVAL);
 
@@ -2248,11 +2725,18 @@ int rtsp_response_header_copy(const struct rtsp_response_header *src,
 	} else {
 		dst->transport = NULL;
 	}
+	if (src->authenticate) {
+		dst->authenticate = rtsp_authorization_header_new();
+		if (dst->authenticate == NULL)
+			return -ENOMEM;
+		rtsp_authorization_header_copy(src->authenticate,
+					       dst->authenticate);
+	}
 	dst->content_type = xstrdup(src->content_type);
 	dst->scale = src->scale;
 	dst->public_methods = src->public_methods;
 	dst->allowed_methods = src->allowed_methods;
-	for (i = 0; i < src->rtp_info_count; i++) {
+	for (unsigned int i = 0; i < src->rtp_info_count; i++) {
 		struct rtsp_rtp_info_header *r = rtsp_rtp_info_header_new();
 		if (r == NULL)
 			return -ENOMEM;
@@ -2283,8 +2767,6 @@ int rtsp_response_header_copy_ext(struct rtsp_response_header *header,
 				  const struct rtsp_header_ext *ext,
 				  size_t ext_count)
 {
-	unsigned int i;
-
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
 
 	if (ext_count == 0)
@@ -2296,7 +2778,7 @@ int rtsp_response_header_copy_ext(struct rtsp_response_header *header,
 	if (header->ext == NULL)
 		return -ENOMEM;
 	header->ext_count = ext_count;
-	for (i = 0; i < ext_count; i++) {
+	for (unsigned int i = 0; i < ext_count; i++) {
 		header->ext[i].key = xstrdup(ext[i].key);
 		header->ext[i].value = xstrdup(ext[i].value);
 	}
@@ -2513,9 +2995,13 @@ int rtsp_response_header_read(char *msg,
 			      char **body)
 {
 	int ret;
-	char *p, *temp, *temp2;
-	char *version, *status_code_str, *status_string;
-	size_t nl_len, i;
+	char *p;
+	char *temp;
+	char *temp2;
+	const char *version;
+	const char *status_code_str;
+	const char *status_string;
+	size_t nl_len;
 
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(header == NULL, EINVAL);
@@ -2529,7 +3015,7 @@ int rtsp_response_header_read(char *msg,
 	if (p) {
 		if (body)
 			*body = p + nl_len;
-		for (i = 0; i < nl_len; i++)
+		for (size_t i = 0; i < nl_len; i++)
 			p[i] = '\0';
 	} else {
 		ULOGW("%s: end of header not found", __func__);
@@ -2560,7 +3046,9 @@ int rtsp_response_header_read(char *msg,
 
 	p = strtok_r(NULL, RTSP_CRLF, &temp);
 	while (p) {
-		char *field, *value, *p2;
+		const char *field;
+		char *value;
+		char *p2;
 
 		p2 = strchr(p, ':');
 		if (p2) {
@@ -2613,6 +3101,16 @@ int rtsp_response_header_read(char *msg,
 					1,
 					&transport_count);
 				if ((ret < 0) || (transport_count == 0))
+					return ret;
+
+			} else if (!strncasecmp(
+					   field,
+					   RTSP_HEADER_AUTHENTICATE,
+					   strlen(RTSP_HEADER_AUTHENTICATE))) {
+				/* 'WWW-Authenticate' */
+				ret = rtsp_authorization_header_read(
+					value, &header->authenticate);
+				if (ret < 0)
 					return ret;
 
 			} else if (!strncasecmp(
@@ -2794,6 +3292,107 @@ void rtsp_message_clear(struct rtsp_message *msg)
 }
 
 
+static int rtsp_parse_interleaved(const void *raw_data,
+				  size_t len,
+				  struct rtsp_message *msg)
+{
+	const uint8_t *p = raw_data;
+	uint16_t pkt_len;
+
+	if (len < 4 || p[0] != 0x24)
+		return -EINVAL;
+
+	memcpy(&pkt_len, p + 2, sizeof(pkt_len));
+	pkt_len = ntohs(pkt_len);
+
+	if (len < 4U + pkt_len)
+		return -EAGAIN;
+
+	msg->type = RTSP_MESSAGE_TYPE_INTERLEAVED;
+	msg->interleaved.channel = p[1];
+	msg->interleaved.data = p + 4;
+	msg->interleaved.len = pkt_len;
+
+	msg->total_len = 4U + pkt_len;
+
+	return 0;
+}
+
+
+/**
+ * Build an RTSP interleaved packet in a pomp_buffer.
+ *
+ * Constructs a 4-byte RTSP interleaved header followed by the payload
+ * from info->data. The header format is:
+ *   0x24 | channel | payload length (big-endian 16-bit)
+ *
+ * The returned pomp_buffer must be unreferenced with pomp_buffer_unref().
+ *
+ * @param info: Interleaved packet info (channel, data, length)
+ * @param ret_obj: Allocated pomp_buffer containing the packet
+ *
+ * @return 0 on success, negative errno on failure.
+ */
+int rtsp_build_interleaved(const struct rtsp_interleaved_info *info,
+			   struct pomp_buffer **ret_obj)
+{
+	int res;
+	uint8_t *buf_data;
+	uint16_t total_len;
+	uint16_t nlen;
+	struct pomp_buffer *pomp_buf = NULL;
+	uint8_t header[4] = {};
+
+	ULOG_ERRNO_RETURN_ERR_IF(info == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(info->channel > UINT8_MAX, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(info->data == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(info->len == 0, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(info->len > (UINT16_MAX - sizeof(header)),
+				 EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(ret_obj == NULL, EINVAL);
+
+	total_len = sizeof(header) + info->len;
+
+	pomp_buf = pomp_buffer_new(total_len);
+	if (pomp_buf == NULL) {
+		res = -ENOMEM;
+		goto error;
+	}
+
+	res = pomp_buffer_get_data(pomp_buf, (void **)&buf_data, NULL, NULL);
+	if (res < 0) {
+		ULOG_ERRNO("pomp_buffer_get_data", -res);
+		goto error;
+	}
+
+	nlen = htons(info->len);
+
+	/* Build header */
+	header[0] = 0x24;
+	header[1] = info->channel;
+	header[2] = ((uint8_t *)&nlen)[0];
+	header[3] = ((uint8_t *)&nlen)[1];
+
+	/* Copy payload */
+	memcpy(buf_data, header, sizeof(header));
+	memcpy(buf_data + sizeof(header), info->data, info->len);
+
+	res = pomp_buffer_set_len(pomp_buf, total_len);
+	if (res < 0) {
+		ULOG_ERRNO("pomp_buffer_set_len", -res);
+		goto error;
+	}
+
+	*ret_obj = pomp_buf;
+	return 0;
+
+error:
+	if (pomp_buf != NULL)
+		pomp_buffer_unref(pomp_buf);
+	return res;
+}
+
+
 /**
  * Reads the next header (+optional body) from data
  * If no header is found, or if the body is not complete, returns -EAGAIN.
@@ -2803,14 +3402,15 @@ void rtsp_message_clear(struct rtsp_message *msg)
  * If the return code is zero, then msg contains information about a
  * complete request/response, depending on its "type" field.
  */
-int rtsp_get_next_message(struct pomp_buffer *data,
+int rtsp_get_next_message(const struct pomp_buffer *data,
 			  struct rtsp_message *msg,
 			  struct rtsp_message_parser_ctx *ctx)
 {
 	int ret;
 	void *raw_data;
-	char *header_end;
-	size_t len, nl_len;
+	const char *header_end;
+	size_t len;
+	size_t nl_len;
 
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
 	rtsp_message_clear(msg);
@@ -2824,6 +3424,28 @@ int rtsp_get_next_message(struct pomp_buffer *data,
 		ULOG_ERRNO("pomp_buffer_get_data", -ret);
 		return ret;
 	}
+
+	/* Detect RTP/RTCP interleaved packet (RFC 2326, section 10.12) */
+	ret = rtsp_parse_interleaved(raw_data, len, msg);
+	if (ret == 0)
+		return 0;
+
+	/* Packet signature found, but data is incomplete */
+	if (ret == -EAGAIN)
+		return -EAGAIN;
+
+	/* -EINVAL means the magic byte '$' (0x24) was not found. This is
+	 * expected for standard RTSP text messages. */
+	if (ret != -EINVAL) {
+		/* Any other error (e.g. -EPROTO) is unexpected */
+		ULOG_ERRNO("rtsp_parse_interleaved", -ret);
+		return ret;
+	}
+
+	/* If we are here, fallback to standard RTSP text parsing. The data does
+	 * not start with '$', so we treat it as an ASCII request (OPTIONS,
+	 * DESCRIBE, etc.). We reset ret to 0 to avoid propagating -EINVAL. */
+	ret = 0;
 
 	if (ctx->msg.type == RTSP_MESSAGE_TYPE_UNKNOWN) {
 		/* Search for first double newline: end of header */
@@ -2926,4 +3548,49 @@ int rtsp_range_get_duration_us(const struct rtsp_range *range,
 
 	*duration = diff;
 	return 0;
+}
+
+
+static inline bool rtsp_time_cmp(const struct rtsp_time *time1,
+				 const struct rtsp_time *time2)
+{
+	if (time1->format != time2->format)
+		return false;
+
+	switch (time1->format) {
+	case RTSP_TIME_FORMAT_UNKNOWN:
+		return true;
+	case RTSP_TIME_FORMAT_NPT:
+		return (time1->npt.now == time2->npt.now) &&
+		       (time1->npt.infinity == time2->npt.infinity) &&
+		       (time1->npt.sec == time2->npt.sec) &&
+		       (time1->npt.usec == time2->npt.usec);
+	case RTSP_TIME_FORMAT_SMPTE:
+		return (time1->smpte.infinity == time2->smpte.infinity) &&
+		       (time1->smpte.sec == time2->smpte.sec) &&
+		       (time1->smpte.frames == time2->smpte.frames);
+	case RTSP_TIME_FORMAT_ABSOLUTE:
+		return (time1->absolute.infinity == time2->absolute.infinity) &&
+		       (time1->absolute.sec == time2->absolute.sec) &&
+		       (time1->absolute.usec == time2->absolute.usec);
+	}
+
+	return true;
+}
+
+
+bool rtsp_range_cmp(const struct rtsp_range *range1,
+		    const struct rtsp_range *range2)
+{
+	if ((range1 == NULL) && (range2 == NULL))
+		return true;
+	if ((range1 == NULL) || (range2 == NULL))
+		return false;
+
+	if (!rtsp_time_cmp(&range1->start, &range2->start))
+		return false;
+	if (!rtsp_time_cmp(&range1->stop, &range2->stop))
+		return false;
+
+	return (range1->time == range2->time);
 }

@@ -32,13 +32,16 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <libpomp.h>
+#include <libsdp.h>
+#include <rtsp/client.h>
+
 #define ULOG_TAG rtsp_client_test
 #include <ulog.h>
 ULOG_DECLARE_TAG(rtsp_client_test);
 
-#include <libpomp.h>
-#include <libsdp.h>
-#include <rtsp/client.h>
+#define UNUSED(x) (void)(x)
+
 
 /* Win32 stubs */
 #ifdef _WIN32
@@ -61,10 +64,11 @@ struct app {
 	struct pomp_loop *loop;
 	struct pomp_timer *timer;
 	int stopped;
+	bool retried_describe;
 	struct rtsp_client *client;
 	const char *session_id;
+	struct rtsp_url *url;
 	char *addr;
-	char *path;
 	struct {
 		int cancel_enable;
 		int pause_enable;
@@ -107,7 +111,7 @@ static void describe_req(struct app *app)
 	ULOGI("request description");
 
 	res = rtsp_client_describe(app->client,
-				   app->path,
+				   rtsp_url_get_path(app->url),
 				   header_ext,
 				   1,
 				   NULL,
@@ -125,8 +129,9 @@ static void describe_req(struct app *app)
 }
 
 
-static void
-setup_req(struct app *app, const char *content_base, struct sdp_media *media)
+static void setup_req(struct app *app,
+		      const char *content_base,
+		      const struct sdp_media *media)
 {
 	int res = 0;
 	const char *url = NULL;
@@ -151,6 +156,7 @@ setup_req(struct app *app, const char *content_base, struct sdp_media *media)
 				RTSP_LOWER_TRANSPORT_UDP,
 				55004,
 				55005,
+				RTSP_TRANSPORT_METHOD_UNKNOWN,
 				header_ext,
 				1,
 				NULL,
@@ -231,6 +237,8 @@ static void connection_state_cb(struct rtsp_client *client,
 				enum rtsp_client_conn_state state,
 				void *userdata)
 {
+	UNUSED(client);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -239,6 +247,8 @@ static void connection_state_cb(struct rtsp_client *client,
 
 	if (state == RTSP_CLIENT_CONN_STATE_CONNECTED)
 		options_req(app);
+	else
+		app->retried_describe = false;
 }
 
 
@@ -247,6 +257,9 @@ static void session_removed_cb(struct rtsp_client *client,
 			       int status,
 			       void *userdata)
 {
+	UNUSED(client);
+	UNUSED(userdata);
+
 	ULOGI("session %s removed, status=%d(%s)",
 	      session_id,
 	      -status,
@@ -263,7 +276,12 @@ static void options_resp_cb(struct rtsp_client *client,
 			    void *userdata,
 			    void *req_userdata)
 {
-	struct app *app = userdata;
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
+	const struct app *app = userdata;
 	if (!app)
 		return;
 
@@ -295,15 +313,28 @@ static void describe_resp_cb(struct rtsp_client *client,
 			     void *userdata,
 			     void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	int res;
 	struct sdp_session *sdp_session = NULL;
 	struct sdp_media *media = NULL;
-	struct list_node *node = NULL;
+	const struct list_node *node = NULL;
 	struct app *app = userdata;
 	if (!app)
 		return;
 
 	if (req_status == RTSP_CLIENT_REQ_STATUS_FAILED) {
+		if ((status == -EPERM) &&
+		    (rtsp_url_get_user(app->url) != NULL) &&
+		    !app->retried_describe) {
+			/* Silent error and retry */
+			app->retried_describe = true;
+			describe_req(userdata);
+			return;
+		}
 		ULOGE("describe_resp: %s err=%d(%s)",
 		      rtsp_client_req_status_str(req_status),
 		      -status,
@@ -358,6 +389,11 @@ static void setup_resp_cb(struct rtsp_client *client,
 			  void *userdata,
 			  void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -408,6 +444,13 @@ static void play_resp_cb(struct rtsp_client *client,
 			 void *userdata,
 			 void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(range);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -446,6 +489,13 @@ static void pause_resp_cb(struct rtsp_client *client,
 			  void *userdata,
 			  void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(range);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -477,6 +527,12 @@ static void teardown_resp_cb(struct rtsp_client *client,
 			     void *userdata,
 			     void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -509,6 +565,12 @@ static void announce_cb(struct rtsp_client *client,
 			const char *sdp,
 			void *userdata)
 {
+	UNUSED(client);
+	UNUSED(path);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
 	ULOGI("announce: sdp:\n%s", sdp);
 }
 
@@ -528,6 +590,8 @@ static const struct rtsp_client_cbs cbs = {
 
 static void timer_cb(struct pomp_timer *timer, void *userdata)
 {
+	UNUSED(timer);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -570,7 +634,6 @@ int main(int argc, char **argv)
 	int res = 0;
 	int argidx = 0;
 	char *url = NULL;
-	char *tmp;
 
 	memset(&s_app, 0, sizeof(s_app));
 
@@ -606,19 +669,26 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	/* Split addr/path for URL */
-	if (strncmp(url, "rtsp://", 7) != 0) {
-		ULOGE("bad URL scheme, expected 'rtsp://'");
-		exit(EXIT_FAILURE);
+	res = rtsp_url_parse(url, &s_app.url);
+	if (res < 0) {
+		ULOG_ERRNO("rtsp_url_parse", -res);
+		status = EXIT_FAILURE;
+		goto cleanup;
 	}
-	s_app.addr = url;
-	tmp = strchr(&url[7], '/');
-	if (tmp == NULL) {
+
+	if (rtsp_url_get_path(s_app.url) == NULL) {
+		res = -EINVAL;
 		ULOGE("missing path in URL");
-		exit(EXIT_FAILURE);
+		status = EXIT_FAILURE;
+		goto cleanup;
 	}
-	*tmp = '\0';
-	s_app.path = tmp + 1;
+
+	res = rtsp_url_to_str_no_path(s_app.url, &s_app.addr);
+	if (res < 0) {
+		ULOG_ERRNO("rtsp_url_to_str_no_path", -res);
+		status = EXIT_FAILURE;
+		goto cleanup;
+	}
 
 	/* Setup signal handlers */
 	signal(SIGINT, &sig_handler);
@@ -651,7 +721,9 @@ int main(int argc, char **argv)
 	}
 
 	/* Connect RTSP client */
-	printf("Connect client to URL '%s/%s'\n", s_app.addr, s_app.path);
+	printf("Connect client to URL '%s/%s'\n",
+	       s_app.addr,
+	       rtsp_url_get_path(s_app.url));
 	res = rtsp_client_connect(s_app.client, s_app.addr);
 	if (res < 0) {
 		ULOG_ERRNO("rtsp_client_connect", -res);
@@ -688,6 +760,9 @@ cleanup:
 	res = pomp_loop_destroy(s_app.loop);
 	if (res < 0)
 		ULOG_ERRNO("pomp_loop_destroy", -res);
+
+	rtsp_url_free(s_app.url);
+	free(s_app.addr);
 
 	printf("%s\n", (status == EXIT_SUCCESS) ? "Done!" : "Failed!");
 	exit(status);

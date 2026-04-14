@@ -61,10 +61,28 @@
 
 #include "internal/rtsp/rtsp_internal.h"
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
+
+#ifndef PATH_MAX
+#	ifdef _MAX_PATH
+#		define PATH_MAX _MAX_PATH
+#	else
+#		define PATH_MAX 4096
+#	endif
+#endif
+
 #define RTSP_DEFAULT_PORT 554
+#define RTSPS_DEFAULT_PORT 322
 
 #define RTSP_SCHEME_TCP "rtsp://"
 #define RTSP_SCHEME_UDP "rtspu://"
+#define RTSP_SCHEME_TCP_TLS "rtsps://"
+
+#define UNUSED(x) (void)(x)
 
 
 /**
@@ -104,7 +122,7 @@ int rtsp_session_header_write(char *session_id,
 			      struct rtsp_string *str);
 
 
-int rtsp_session_header_read(char *str,
+int rtsp_session_header_read(const char *str,
 			     char **session_id,
 			     unsigned int *session_timeout);
 
@@ -151,6 +169,60 @@ int rtsp_transport_header_read(char *str,
 			       unsigned int *count);
 
 
+struct rtsp_authorization_header *rtsp_authorization_header_new(void);
+
+
+int rtsp_authorization_header_free(struct rtsp_authorization_header **auth);
+
+
+int rtsp_authorization_header_copy(const struct rtsp_authorization_header *src,
+				   struct rtsp_authorization_header *dst);
+
+
+/**
+ * Copy server-provided fields from one RTSP authorization header to another.
+ *
+ * This function only copies fields that are typically provided by the server
+ * in a WWW-Authenticate header (or similar). It does NOT copy client-side
+ * fields such as username, URI, response, cnonce, or nonce count.
+ *
+ * @param src: Source authorization header (server-provided values).
+ * @param dst: Destination authorization header (typically client->auth).
+ *
+ * @return 0 on success, negative errno on error.
+ */
+int rtsp_authorization_header_copy_server_fields(
+	const struct rtsp_authorization_header *src,
+	struct rtsp_authorization_header *dst);
+
+
+/**
+ * Copy client-provided fields from one RTSP authorization header to another.
+ *
+ * This function only copies fields that are typically set by the client when
+ * preparing an Authorization header for a request. It does NOT copy server-side
+ * fields such as realm, nonce, opaque, qop, or algorithm.
+ *
+ * @param src: Source authorization header (client values).
+ * @param dst: Destination authorization header (typically
+ * client->request.header.authorization).
+ *
+ * @return 0 on success, negative errno on error.
+ */
+int rtsp_authorization_header_copy_client_fields(
+	const struct rtsp_authorization_header *src,
+	struct rtsp_authorization_header *dst);
+
+
+int rtsp_authorization_header_write(
+	const struct rtsp_authorization_header *auth,
+	struct rtsp_string *str);
+
+
+int rtsp_authorization_header_read(char *str,
+				   struct rtsp_authorization_header **auth);
+
+
 int rtsp_request_header_clear(struct rtsp_request_header *header);
 
 
@@ -185,6 +257,73 @@ int rtsp_response_header_read(char *msg,
 			      size_t len,
 			      struct rtsp_response_header *header,
 			      char **body);
+
+
+int rtsp_url_parse_host_and_path(char *url, char **host, char **path);
+
+
+int rtsp_url_parse_path(char *url, char **path);
+
+
+#define MAX_RTSP_BASE64_LEN 4096
+
+
+RTSP_API int rtsp_base64_encode(const void *data, size_t size, char **out);
+
+
+RTSP_API int rtsp_base64_decode(const char *str, void **out, size_t *out_size);
+
+
+/**
+ * Convert a request counter (nc) into a zero-padded 8-digit hexadecimal string.
+ *
+ * @param buffer: buffer to store the string (must be at least 9 bytes)
+ * @param len: size of the buffer
+ * @param nc: the request counter
+ *
+ * @return 0 on success, negative errno on error.
+ */
+RTSP_API int rtsp_auth_nc_str(char *buffer, size_t len, unsigned int nc);
+
+
+/**
+ * Generate a Basic Authorization response for RTSP.
+ *
+ * The function computes the Base64-encoded credentials in the form:
+ *   "username:password"
+ * and stores the result in auth->credentials.
+ *
+ * @param auth: authorization header structure (type must be BASIC, username
+ * must be set)
+ * @param password: user's password
+ *
+ * @return 0 on success, negative errno on error.
+ */
+RTSP_API int
+rtsp_auth_generate_basic_response(struct rtsp_authorization_header *auth,
+				  const char *password);
+
+
+/**
+ * Generate a Digest Authorization response for RTSP.
+ *
+ * The function computes auth->response using the Digest algorithm according
+ * to RFC 2617. Required fields in auth are: username, realm, nonce, uri.
+ * The client nonce (cnonce) and request counter (nc) are automatically
+ * generated and stored in auth. The qop and algorithm determine the format of
+ * the response.
+ *
+ * @param auth: authorization header structure (type must be DIGEST, required
+ * fields set)
+ * @param password: user's password
+ * @param method_type: RTSP method type (SETUP, PLAY, etc.)
+ *
+ * @return 0 on success, negative errno on error.
+ */
+RTSP_API int
+rtsp_auth_generate_digest_response(struct rtsp_authorization_header *auth,
+				   const char *password,
+				   enum rtsp_method_type method_type);
 
 
 #define CHECK_FUNC(_func, _ret, _on_err, ...)                                  \
@@ -234,6 +373,13 @@ static inline char *xstrdup(const char *s)
 }
 
 
+static inline void dup_field(char **dst, const char *src)
+{
+	xfree((void **)dst);
+	*dst = xstrdup(src);
+}
+
+
 static inline void get_time_with_ms_delay(struct timespec *ts,
 					  unsigned int delay)
 {
@@ -246,10 +392,21 @@ static inline void get_time_with_ms_delay(struct timespec *ts,
 }
 
 
-static inline char get_last_char(const char *str)
+static inline char get_last_char(const char *str, size_t max_len)
 {
-	return str[strlen(str) - 1];
+	if (!str || *str == '\0')
+		return '\0';
+
+	size_t len = strnlen(str, max_len);
+	if ((len == 0) || (len >= max_len))
+		return '\0';
+
+	return str[len - 1];
 }
 
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
 
 #endif /* !_RTSP_PRIV_H_ */

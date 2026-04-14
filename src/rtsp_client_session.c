@@ -88,7 +88,8 @@ int rtsp_client_remove_session_internal(struct rtsp_client *client,
 					int nexist_ok)
 {
 	struct rtsp_client_session *session;
-	struct rtsp_client_session_media *media = NULL, *tmp_media = NULL;
+	struct rtsp_client_session_media *media = NULL;
+	struct rtsp_client_session_media *tmp_media = NULL;
 	int status = 0;
 
 	if (!client || !session_id)
@@ -101,6 +102,11 @@ int rtsp_client_remove_session_internal(struct rtsp_client *client,
 	/* Remove all medias */
 	list_walk_entry_forward_safe(&session->medias, media, tmp_media, node)
 	{
+		if (is_channel_pair_valid(&media->channel_pair)) {
+			set_channel_pair_used(client->channel_used,
+					      &media->channel_pair,
+					      false);
+		}
 		rtsp_client_session_media_remove(client, session, media);
 	}
 
@@ -124,7 +130,8 @@ int rtsp_client_remove_session_internal(struct rtsp_client *client,
 
 void rtsp_client_remove_all_sessions(struct rtsp_client *client)
 {
-	struct rtsp_client_session *session, *tmp;
+	const struct rtsp_client_session *session;
+	const struct rtsp_client_session *tmp;
 
 	if (!client)
 		return;
@@ -136,8 +143,9 @@ void rtsp_client_remove_all_sessions(struct rtsp_client *client)
 }
 
 
-struct rtsp_client_session *rtsp_client_session_find(struct rtsp_client *client,
-						     const char *session_id)
+struct rtsp_client_session *
+rtsp_client_session_find(const struct rtsp_client *client,
+			 const char *session_id)
 {
 	int found = 0;
 	struct rtsp_client_session *session = NULL;
@@ -156,16 +164,18 @@ struct rtsp_client_session *rtsp_client_session_find(struct rtsp_client *client,
 		}
 	}
 
-	return (found) ? session : NULL;
+	return found ? session : NULL;
 }
 
 
 struct rtsp_client_session_media *
-rtsp_client_session_media_add(struct rtsp_client *client,
+rtsp_client_session_media_add(const struct rtsp_client *client,
 			      struct rtsp_client_session *session,
-			      const char *path)
+			      const char *path,
+			      const struct rtsp_channel_pair *channel_pair)
 {
-	struct rtsp_client_session_media *media = NULL, *_media;
+	struct rtsp_client_session_media *media = NULL;
+	const struct rtsp_client_session_media *_media;
 
 	ULOG_ERRNO_RETURN_VAL_IF(client == NULL, EINVAL, NULL);
 	ULOG_ERRNO_RETURN_VAL_IF(session == NULL, EINVAL, NULL);
@@ -180,6 +190,9 @@ rtsp_client_session_media_add(struct rtsp_client *client,
 	media->session = session;
 	media->path = strdup(path);
 
+	if (channel_pair != NULL)
+		media->channel_pair = *channel_pair;
+
 	/* Add to the list */
 	list_add_before(&session->medias, &media->node);
 	session->media_count++;
@@ -190,12 +203,12 @@ rtsp_client_session_media_add(struct rtsp_client *client,
 }
 
 
-int rtsp_client_session_media_remove(struct rtsp_client *client,
+int rtsp_client_session_media_remove(const struct rtsp_client *client,
 				     struct rtsp_client_session *session,
 				     struct rtsp_client_session_media *media)
 {
 	int found = 0;
-	struct rtsp_client_session_media *_media = NULL;
+	const struct rtsp_client_session_media *_media = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session == NULL, EINVAL);
@@ -228,8 +241,8 @@ int rtsp_client_session_media_remove(struct rtsp_client *client,
 
 
 struct rtsp_client_session_media *
-rtsp_client_session_media_find(struct rtsp_client *client,
-			       struct rtsp_client_session *session,
+rtsp_client_session_media_find(const struct rtsp_client *client,
+			       const struct rtsp_client_session *session,
 			       const char *path)
 {
 	int found = 0;
@@ -247,5 +260,5 @@ rtsp_client_session_media_find(struct rtsp_client *client,
 		}
 	}
 
-	return (found) ? media : NULL;
+	return found ? media : NULL;
 }

@@ -67,6 +67,15 @@ enum rtsp_client_req_status {
 struct rtsp_client_cbs {
 	void (*socket_cb)(int fd, void *userdata);
 
+	void (*ready_to_send_cb)(struct rtsp_client *client, void *userdata);
+
+	/* Called only for lower transport RTSP_LOWER_TRANSPORT_TCP */
+	void (*interleaved_data_cb)(struct rtsp_client *client,
+				    uint8_t channel,
+				    const uint8_t *data,
+				    size_t len,
+				    void *userdata);
+
 	/* Called only for states CONNECTED and DISCONNECTED */
 	void (*connection_state)(struct rtsp_client *client,
 				 enum rtsp_client_conn_state state,
@@ -93,6 +102,14 @@ struct rtsp_client_cbs {
 			      const struct rtsp_header_ext *ext,
 			      size_t ext_count,
 			      const char *sdp,
+			      void *userdata,
+			      void *req_userdata);
+
+	void (*announce_resp)(struct rtsp_client *client,
+			      enum rtsp_client_req_status req_status,
+			      int status,
+			      const struct rtsp_header_ext *ext,
+			      size_t ext_count,
 			      void *userdata,
 			      void *req_userdata);
 
@@ -134,6 +151,15 @@ struct rtsp_client_cbs {
 			   void *userdata,
 			   void *req_userdata);
 
+	void (*record_resp)(struct rtsp_client *client,
+			    const char *session_id,
+			    enum rtsp_client_req_status req_status,
+			    int status,
+			    const struct rtsp_header_ext *ext,
+			    size_t ext_count,
+			    void *userdata,
+			    void *req_userdata);
+
 	void (*teardown_resp)(struct rtsp_client *client,
 			      const char *session_id,
 			      enum rtsp_client_req_status req_status,
@@ -169,10 +195,14 @@ RTSP_API int rtsp_client_new(struct pomp_loop *loop,
 RTSP_API int rtsp_client_destroy(struct rtsp_client *client);
 
 
-RTSP_API int rtsp_client_connect(struct rtsp_client *client, const char *addr);
+RTSP_API int rtsp_client_connect(struct rtsp_client *client, const char *url);
 
 
 RTSP_API int rtsp_client_disconnect(struct rtsp_client *client);
+
+
+RTSP_API const struct rtsp_url *
+rtsp_client_get_remote_url(const struct rtsp_client *client);
 
 
 RTSP_API int rtsp_client_options(struct rtsp_client *client,
@@ -190,6 +220,15 @@ RTSP_API int rtsp_client_describe(struct rtsp_client *client,
 				  unsigned int timeout_ms);
 
 
+RTSP_API int rtsp_client_announce(struct rtsp_client *client,
+				  const char *path,
+				  const char *session_description,
+				  const struct rtsp_header_ext *ext,
+				  size_t ext_count,
+				  void *req_userdata,
+				  unsigned int timeout_ms);
+
+
 RTSP_API int rtsp_client_setup(struct rtsp_client *client,
 			       const char *content_base,
 			       const char *resource_url,
@@ -198,6 +237,7 @@ RTSP_API int rtsp_client_setup(struct rtsp_client *client,
 			       enum rtsp_lower_transport lower_transport,
 			       uint16_t dst_stream_port,
 			       uint16_t dst_control_port,
+			       enum rtsp_transport_method method,
 			       const struct rtsp_header_ext *ext,
 			       size_t ext_count,
 			       void *req_userdata,
@@ -223,6 +263,21 @@ RTSP_API int rtsp_client_pause(struct rtsp_client *client,
 			       unsigned int timeout_ms);
 
 
+RTSP_API int rtsp_client_record(struct rtsp_client *client,
+				const char *session_id,
+				const struct rtsp_range *range,
+				const struct rtsp_header_ext *ext,
+				size_t ext_count,
+				void *req_userdata,
+				unsigned int timeout_ms);
+
+
+RTSP_API int rtsp_client_send_interleaved(struct rtsp_client *client,
+					  uint8_t channel,
+					  const uint8_t *data,
+					  size_t len);
+
+
 RTSP_API int rtsp_client_teardown(struct rtsp_client *client,
 				  const char *resource_url,
 				  const char *session_id,
@@ -238,6 +293,17 @@ RTSP_API int rtsp_client_remove_session(struct rtsp_client *client,
 
 RTSP_API int rtsp_client_cancel(struct rtsp_client *client);
 
+
+RTSP_API int rtsp_client_set_socket_rxbuf_size(struct rtsp_client *client,
+					       size_t size);
+
+
+RTSP_API int rtsp_client_set_socket_txbuf_size(struct rtsp_client *client,
+					       size_t size);
+
+
+RTSP_API int rtsp_client_set_socket_class_selector(struct rtsp_client *client,
+						   uint32_t class_selector);
 
 RTSP_API const char *
 rtsp_client_conn_state_str(enum rtsp_client_conn_state val);

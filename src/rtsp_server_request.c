@@ -66,7 +66,7 @@ int rtsp_server_pending_request_remove(
 	struct rtsp_server_pending_request *request)
 {
 	int found = 0;
-	struct rtsp_server_pending_request *_request = NULL;
+	const struct rtsp_server_pending_request *_request = NULL;
 	struct rtsp_server_pending_request_media *media = NULL;
 	struct rtsp_server_pending_request_media *tmp_media = NULL;
 
@@ -106,11 +106,11 @@ int rtsp_server_pending_request_remove(
 
 
 int rtsp_server_pending_request_find(
-	struct rtsp_server *server,
-	struct rtsp_server_pending_request *request)
+	const struct rtsp_server *server,
+	const struct rtsp_server_pending_request *request)
 {
 	int found = 0;
-	struct rtsp_server_pending_request *_request = NULL;
+	const struct rtsp_server_pending_request *_request = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request == NULL, EINVAL);
@@ -123,12 +123,12 @@ int rtsp_server_pending_request_find(
 		}
 	}
 
-	return (found) ? 0 : -ENOENT;
+	return found ? 0 : -ENOENT;
 }
 
 
 struct rtsp_server_pending_request_media *rtsp_server_pending_request_media_add(
-	struct rtsp_server *server,
+	const struct rtsp_server *server,
 	struct rtsp_server_pending_request *request,
 	struct rtsp_server_session_media *media)
 {
@@ -152,12 +152,12 @@ struct rtsp_server_pending_request_media *rtsp_server_pending_request_media_add(
 
 
 int rtsp_server_pending_request_media_remove(
-	struct rtsp_server *server,
+	const struct rtsp_server *server,
 	struct rtsp_server_pending_request *request,
 	struct rtsp_server_pending_request_media *media)
 {
 	int found = 0;
-	struct rtsp_server_pending_request_media *_media = NULL;
+	const struct rtsp_server_pending_request_media *_media = NULL;
 
 	ULOG_ERRNO_RETURN_ERR_IF(server == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(request == NULL, EINVAL);
