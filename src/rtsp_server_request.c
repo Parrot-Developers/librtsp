@@ -99,6 +99,7 @@ int rtsp_server_pending_request_remove(
 
 	rtsp_request_header_clear(&request->request_header);
 	rtsp_response_header_clear(&request->response_header);
+	free(request->body);
 	free(request);
 
 	return 0;

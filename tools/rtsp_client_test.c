@@ -633,7 +633,7 @@ int main(int argc, char **argv)
 	int status = EXIT_SUCCESS;
 	int res = 0;
 	int argidx = 0;
-	char *url = NULL;
+	const char *url = NULL;
 
 	memset(&s_app, 0, sizeof(s_app));
 
@@ -677,7 +677,6 @@ int main(int argc, char **argv)
 	}
 
 	if (rtsp_url_get_path(s_app.url) == NULL) {
-		res = -EINVAL;
 		ULOGE("missing path in URL");
 		status = EXIT_FAILURE;
 		goto cleanup;

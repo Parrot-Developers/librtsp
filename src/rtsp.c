@@ -1123,7 +1123,7 @@ int rtsp_rtp_info_header_read(char *str,
 	int ret = 0;
 	unsigned int _count = 0;
 	struct rtsp_rtp_info_header *rtpi;
-	const char *rtpi_str;
+	char *rtpi_str;
 	char *param;
 	char *temp;
 	char *temp2;
@@ -1139,7 +1139,7 @@ int rtsp_rtp_info_header_read(char *str,
 	/* Loop on RTP info */
 	rtpi_str = strtok_r(str, ",", &temp);
 	while (rtpi_str && (_count < max_count)) {
-		param = strtok_r(str, ";", &temp2);
+		param = strtok_r(rtpi_str, ";", &temp2);
 
 		if (param == NULL) {
 			rtpi_str = strtok_r(NULL, ",", &temp);
@@ -1626,7 +1626,8 @@ static void process_transport_key_val(struct rtsp_transport_header *trsp,
 		char *temp;
 		unsigned int int_idx = 0;
 		while ((pair_str = strtok_r(val, ",", &temp)) != NULL) {
-			unsigned int rtp, rtcp;
+			unsigned int rtp;
+			unsigned int rtcp;
 			if (int_idx >= RTSP_MAX_INTERLEAVED_MEDIA) {
 				ULOGE("cannot parse interleaved:"
 				      " too many pairs (max %u)",
@@ -1668,7 +1669,7 @@ int rtsp_transport_header_read(char *str,
 	int ret = 0;
 	unsigned int _count = 0;
 	struct rtsp_transport_header *trsp;
-	const char *trsp_str;
+	char *trsp_str;
 	char *param;
 	char *temp;
 	char *temp2;
@@ -1684,7 +1685,7 @@ int rtsp_transport_header_read(char *str,
 	/* Loop on transports */
 	trsp_str = strtok_r(str, ",", &temp);
 	while (trsp_str && (_count < max_count)) {
-		param = strtok_r(str, ";", &temp2);
+		param = strtok_r(trsp_str, ";", &temp2);
 
 		if (param == NULL) {
 			trsp_str = strtok_r(NULL, ",", &temp);
@@ -2020,7 +2021,7 @@ static char *strip_quotes(const char *s)
 static void
 process_authorization_key_val(struct rtsp_authorization_header *auth,
 			      const char *key,
-			      char *val)
+			      const char *val)
 {
 	/* 'username' */
 	if (strcmp(key, RTSP_KEY_AUTH_USERNAME) == 0) {
@@ -2084,6 +2085,10 @@ process_authorization_key_val(struct rtsp_authorization_header *auth,
 	if (strcmp(key, RTSP_KEY_AUTH_NC) == 0) {
 		char *val2 = strip_quotes(val);
 		char *endptr = NULL;
+		if (val2 == NULL) {
+			ULOGE("cannot read 'nc': missing value");
+			goto out;
+		}
 		errno = 0;
 		unsigned long parsedlong = strtoul(val2, &endptr, 16);
 		if (errno == ERANGE || parsedlong > UINT_MAX ||
@@ -2107,6 +2112,34 @@ out:
 
 
 /**
+ * Parse and process a single "key=value" digest authorization parameter
+ */
+static void parse_digest_auth_param(struct rtsp_authorization_header *auth,
+				    char *param)
+{
+	char *temp3;
+	const char *key;
+	const char *val;
+
+	key = strtok_r(param, "=", &temp3);
+	val = strtok_r(NULL, "", &temp3);
+
+	if (key == NULL) {
+		ULOGW("no key");
+		return;
+	}
+
+	while (*key == ' ')
+		key++;
+	if (val != NULL) {
+		while (*val == ' ')
+			val++;
+	}
+	process_authorization_key_val(auth, key, val);
+}
+
+
+/**
  * RTSP Authorization header
  * see RFC 2326 §10.4 and RFC 2617 for Basic/Digest auth
  */
@@ -2115,7 +2148,7 @@ int rtsp_authorization_header_read(char *str,
 {
 	int ret = 0;
 	struct rtsp_authorization_header *_auth;
-	char *token = NULL;
+	const char *token = NULL;
 	char *param = NULL;
 	char *temp;
 	char *temp2;
@@ -2142,14 +2175,30 @@ int rtsp_authorization_header_read(char *str,
 	if (strcasecmp(token, rtsp_auth_type_str(RTSP_AUTH_TYPE_BASIC)) == 0) {
 		_auth->type = RTSP_AUTH_TYPE_BASIC;
 
-		/* credentials */
 		param = strtok_r(NULL, " ", &temp);
 		if (!param) {
 			ret = -EPROTO;
 			goto error;
 		}
-		xfree((void **)&_auth->credentials);
-		_auth->credentials = xstrdup(param);
+
+		if (strncasecmp(param,
+				RTSP_KEY_AUTH_REALM "=",
+				strlen(RTSP_KEY_AUTH_REALM) + 1) == 0) {
+			/* challenge form: WWW-Authenticate: Basic
+			 * realm="..." -- distinguished from the response
+			 * form's raw base64 credentials by the "realm=" key,
+			 * since RFC 2617 S11.1 defines realm as Basic's only
+			 * challenge parameter, and base64 credentials never
+			 * start with that literal prefix */
+			key = strtok_r(param, "=", &temp3);
+			val = strtok_r(NULL, "", &temp3);
+			process_authorization_key_val(_auth, key, val);
+		} else {
+			/* response form: Authorization: Basic
+			 * <base64-credentials> */
+			xfree((void **)&_auth->credentials);
+			_auth->credentials = xstrdup(param);
+		}
 
 	} else if (strcasecmp(token,
 			      rtsp_auth_type_str(RTSP_AUTH_TYPE_DIGEST)) == 0) {
@@ -2158,19 +2207,7 @@ int rtsp_authorization_header_read(char *str,
 
 		param = strtok_r(rest, ",", &temp2);
 		while (param) {
-			key = strtok_r(param, "=", &temp3);
-			val = strtok_r(NULL, "", &temp3);
-
-			while (*key == ' ')
-				key++;
-			while (*val == ' ')
-				val++;
-
-			if (key == NULL)
-				ULOGW("no key");
-			else
-				process_authorization_key_val(_auth, key, val);
-
+			parse_digest_auth_param(_auth, param);
 			param = strtok_r(NULL, ",", &temp2);
 		}
 	} else {
@@ -2600,7 +2637,7 @@ int rtsp_request_header_read(char *str,
 					   strlen(RTSP_HEADER_AUTHORIZATION))) {
 				/* 'Authorization' */
 				ret = rtsp_authorization_header_read(
-					str, &header->authorization);
+					value, &header->authorization);
 				if (ret < 0)
 					return ret;
 
@@ -3444,8 +3481,7 @@ int rtsp_get_next_message(const struct pomp_buffer *data,
 
 	/* If we are here, fallback to standard RTSP text parsing. The data does
 	 * not start with '$', so we treat it as an ASCII request (OPTIONS,
-	 * DESCRIBE, etc.). We reset ret to 0 to avoid propagating -EINVAL. */
-	ret = 0;
+	 * DESCRIBE, etc.). */
 
 	if (ctx->msg.type == RTSP_MESSAGE_TYPE_UNKNOWN) {
 		/* Search for first double newline: end of header */

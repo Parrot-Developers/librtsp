@@ -59,6 +59,21 @@ include $(BUILD_EXECUTABLE)
 
 
 include $(CLEAR_VARS)
+LOCAL_MODULE := rtsp-server-ingest-test
+LOCAL_CATEGORY_PATH := multimedia
+LOCAL_DESCRIPTION := Real Time Streaming Protocol library server ingest test program
+LOCAL_SRC_FILES := \
+	tools/rtsp_server_ingest_test.c
+LOCAL_LIBRARIES := \
+	libfutils \
+	libpomp \
+	librtsp \
+	libsdp \
+	libulog
+include $(BUILD_EXECUTABLE)
+
+
+include $(CLEAR_VARS)
 LOCAL_MODULE := rtsp-client-test
 LOCAL_CATEGORY_PATH := multimedia
 LOCAL_DESCRIPTION := Real Time Streaming Protocol library client test program
@@ -91,19 +106,48 @@ ifdef TARGET_TEST
 include $(CLEAR_VARS)
 
 LOCAL_MODULE := tst-librtsp
-LOCAL_CFLAGS += -DTARGET_TEST -D_GNU_SOURCE
-LOCAL_C_INCLUDES := $(LOCAL_PATH)/src
-LOCAL_EXPORT_CXXFLAGS := -std=c++11
+LOCAL_CFLAGS := -DTARGET_TEST -D_GNU_SOURCE
+LOCAL_CXXFLAGS := -DTARGET_TEST -D_GNU_SOURCE -std=c++11
+LOCAL_C_INCLUDES := $(LOCAL_PATH)/include $(LOCAL_PATH)/src
+# librtsp's internals (rtsp.c and the client/server files) are hidden
+# (-fvisibility=hidden) in librtsp.so, so they are compiled directly into
+# this test binary instead of linking librtsp itself. See
+# packages/librtmp/atom.mk for the same pattern.
 LOCAL_SRC_FILES := \
+	src/rtsp.c \
+	src/rtsp_auth.c \
+	src/rtsp_base64.c \
+	src/rtsp_client.c \
+	src/rtsp_client_session.c \
+	src/rtsp_server.c \
+	src/rtsp_server_request.c \
+	src/rtsp_server_session.c \
+	src/rtsp_url.c \
+	src/rtsp_url.cpp \
 	tests/rtsp_test_auth.c \
 	tests/rtsp_test_base64.c \
 	tests/rtsp_test_url.c \
 	tests/rtsp_test_url.cpp \
+	tests/rtsp_test_common.c \
+	tests/rtsp_test_header.c \
+	tests/rtsp_test_message.c \
+	tests/rtsp_test_loopback.c \
+	tests/rtsp_test_tls.c \
 	tests/rtsp_test.c
 LOCAL_LIBRARIES := \
+	libcrypto \
 	libcunit \
 	libfutils \
-	librtsp
+	libpomp \
+	libtransport-packet \
+	libtransport-socket \
+	libtransport-tls \
+	libulog
+
+ifeq ("$(TARGET_OS)","windows")
+  LOCAL_CFLAGS += -D_WIN32_WINNT=0x0600
+  LOCAL_LDLIBS += -lws2_32
+endif
 
 include $(BUILD_EXECUTABLE)
 

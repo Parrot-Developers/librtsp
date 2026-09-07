@@ -108,6 +108,32 @@ struct rtsp_server_cbs {
 				void *request_ctx,
 				enum rtsp_method_type method,
 				void *userdata);
+
+	void (*announce)(struct rtsp_server *server,
+			 const char *server_address,
+			 const char *path,
+			 const char *sdp,
+			 const struct rtsp_header_ext *ext,
+			 size_t ext_count,
+			 void *request_ctx,
+			 void *userdata);
+
+	void (*record)(struct rtsp_server *server,
+		       const char *session_id,
+		       const struct rtsp_header_ext *ext,
+		       size_t ext_count,
+		       void *request_ctx,
+		       void *media_ctx,
+		       const struct rtsp_range *range,
+		       void *stream_userdata,
+		       void *userdata);
+
+	void (*interleaved_data)(struct rtsp_server *server,
+				 struct pomp_conn *conn,
+				 uint8_t channel,
+				 const void *data,
+				 size_t len,
+				 void *userdata);
 };
 
 
@@ -176,6 +202,22 @@ RTSP_API int rtsp_server_reply_to_teardown(struct rtsp_server *server,
 					   size_t ext_count);
 
 
+RTSP_API int rtsp_server_reply_to_announce(struct rtsp_server *server,
+					   void *request_ctx,
+					   int status,
+					   const struct rtsp_header_ext *ext,
+					   size_t ext_count);
+
+
+RTSP_API int rtsp_server_reply_to_record(struct rtsp_server *server,
+					 void *request_ctx,
+					 void *media_ctx,
+					 int status,
+					 const struct rtsp_range *range,
+					 const struct rtsp_header_ext *ext,
+					 size_t ext_count);
+
+
 RTSP_API int rtsp_server_announce(struct rtsp_server *server,
 				  char *uri,
 				  const struct rtsp_header_ext *ext,
@@ -192,6 +234,31 @@ RTSP_API int rtsp_server_force_teardown(struct rtsp_server *server,
 
 RTSP_API const char *
 rtsp_server_teardown_reason_str(enum rtsp_server_teardown_reason val);
+
+
+/**
+ * Send an interleaved (TCP-embedded) data packet to a connected client.
+ *
+ * Encapsulates @p data in an RTSP interleaved frame (RFC 2326 §10.12):
+ *   0x24 | channel | len_hi | len_lo | data...
+ * and writes it to the server's TCP connection.
+ *
+ * This is the server-side symmetric counterpart of
+ * rtsp_client_send_interleaved(). It allows the server to push RTP/RTCP packets
+ * over the shared RTSP control connection when the client negotiated TCP
+ * interleaved transport.
+ *
+ * @param server  RTSP server handle.
+ * @param channel Interleaved channel number (0 = RTP, 1 = RTCP by convention).
+ * @param data    Payload bytes to send.
+ * @param len     Payload length in bytes (must be > 0 and <= UINT16_MAX).
+ *
+ * @return 0 on success, negative errno value on error.
+ */
+RTSP_API int rtsp_server_send_interleaved(struct rtsp_server *server,
+					  uint8_t channel,
+					  const uint8_t *data,
+					  size_t len);
 
 
 #ifdef __cplusplus

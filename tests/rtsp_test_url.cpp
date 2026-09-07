@@ -27,6 +27,9 @@
 
 #include "rtsp_test.h"
 
+#include <array>
+#include <string>
+
 #include <rtsp/rtsp_url.hpp>
 
 
@@ -299,8 +302,70 @@ static void testRtspUrl(void)
 }
 
 
+static void testRtspUrlResolvedHost(void)
+{
+	auto url = RtspUrl::create("rtsp://host.example.com/live");
+	CU_ASSERT_PTR_NOT_NULL_FATAL(url.get());
+
+	ASSERT_STR_EQ(url->getOriginalUrl(),
+		      std::string("rtsp://host.example.com/live"));
+
+	/* No resolved host yet (host.example.com is not an IP literal) */
+	CU_ASSERT_FALSE(url->hasResolvedHost());
+	ASSERT_STR_EQ(url->getResolvedHost(), std::string(""));
+	ASSERT_STR_EQ(url->getUrlResolved(), url->getUrl());
+	ASSERT_STR_EQ(url->getBaseUrlResolved(), url->getBaseUrl());
+
+	int ret = url->setResolvedHost("1.2.3.4");
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_TRUE(url->hasResolvedHost());
+	ASSERT_STR_EQ(url->getResolvedHost(), std::string("1.2.3.4"));
+
+	/* getUrl()/getBaseUrl() still reflect the ORIGINAL host name ... */
+	ASSERT_STR_EQ(url->getUrl(),
+		      std::string("rtsp://host.example.com/live"));
+	ASSERT_STR_EQ(url->getBaseUrl(),
+		      std::string("rtsp://host.example.com"));
+
+	/* ... while getUrlResolved()/getBaseUrlResolved() use the newly
+	 * resolved IP instead */
+	ASSERT_STR_EQ(url->getUrlResolved(),
+		      std::string("rtsp://1.2.3.4/live"));
+	ASSERT_STR_EQ(url->getBaseUrlResolved(), std::string("rtsp://1.2.3.4"));
+
+	/* getBaseUrlWithAuth() without credentials equals getBaseUrl() */
+	ASSERT_STR_EQ(url->getBaseUrlWithAuth(), url->getBaseUrl());
+
+	/* toString()/operator<< don't crash and surface the resolved host,
+	 * masking any password */
+	std::string s = url->toString();
+	CU_ASSERT_TRUE(s.find("1.2.3.4") != std::string::npos);
+	std::ostringstream oss;
+	oss << *url;
+	CU_ASSERT_STRING_EQUAL(oss.str().c_str(), s.c_str());
+}
+
+
+static void testRtspUrlWithAuthAndPasswordMasking(void)
+{
+	auto url = RtspUrl::create("rtsp://bob:secret@host.example.com/live");
+	CU_ASSERT_PTR_NOT_NULL_FATAL(url.get());
+
+	ASSERT_STR_EQ(url->getBaseUrlWithAuth(),
+		      std::string("rtsp://bob:secret@host.example.com"));
+
+	/* toString() masks the password, never prints it in the clear */
+	std::string s = url->toString();
+	CU_ASSERT_TRUE(s.find("secret") == std::string::npos);
+	CU_ASSERT_TRUE(s.find("****") != std::string::npos);
+}
+
+
 CU_TestInfo g_rtsp_test_url_cpp[] = {
 	{FN("rtsp-url-cpp"), &testRtspUrl},
+	{FN("rtsp-url-cpp-resolved-host"), &testRtspUrlResolvedHost},
+	{FN("rtsp-url-cpp-with-auth-and-password-masking"),
+	 &testRtspUrlWithAuthAndPasswordMasking},
 
 	CU_TEST_INFO_NULL,
 };

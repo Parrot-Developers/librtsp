@@ -152,7 +152,7 @@ struct rtsp_rtp_info_header {
 #define RTSP_KEY_AUTH_ALGO		"algorithm"
 #define RTSP_KEY_AUTH_ALGO_MD5		"MD5"
 #define RTSP_KEY_AUTH_ALGO_MD5_SESS	"MD5-sess"
-#define RTSP_KEY_AUTH_OPAQUE		"qop"
+#define RTSP_KEY_AUTH_OPAQUE		"opaque"
 #define RTSP_KEY_AUTH_QOP_AUTH		"auth"
 #define RTSP_KEY_AUTH_QOP_AUTH_INT	"auth-int"
 #define RTSP_KEY_AUTH_QOP		"qop"

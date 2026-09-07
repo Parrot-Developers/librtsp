@@ -42,7 +42,7 @@ static inline void clear_remote_info(struct rtsp_client *client)
 }
 
 
-static int set_socket_rxbuf_size(struct rtsp_client *client,
+static int set_socket_rxbuf_size(const struct rtsp_client *client,
 				 struct tskt_socket *sock)
 {
 	int ret;
@@ -71,7 +71,7 @@ static int set_socket_rxbuf_size(struct rtsp_client *client,
 }
 
 
-static int set_socket_txbuf_size(struct rtsp_client *client,
+static int set_socket_txbuf_size(const struct rtsp_client *client,
 				 struct tskt_socket *sock)
 {
 	int ret;
@@ -100,7 +100,7 @@ static int set_socket_txbuf_size(struct rtsp_client *client,
 }
 
 
-static int set_socket_class_selector(struct rtsp_client *client,
+static int set_socket_class_selector(const struct rtsp_client *client,
 				     struct tskt_socket *sock)
 {
 	int ret;
@@ -144,6 +144,8 @@ tskt_client_socket_upgrade_cb(struct tskt_client *ctx,
 			      struct tskt_socket *sock,
 			      void *userdata)
 {
+	UNUSED(ctx);
+
 	int err;
 	struct rtsp_client *client = userdata;
 	struct tskt_socket *tmp_sock = NULL;
@@ -546,8 +548,15 @@ static int send_keep_alive(struct rtsp_client *client,
 
 	/* Send the request */
 	res = send_request(client, NULL, timeout_ms);
-	if (res < 0)
+	if (res == -EAGAIN) {
+		res = pomp_timer_set(client->request.timer, timeout_ms);
+		if (res < 0) {
+			ULOG_ERRNO("pomp_timer_set", -res);
+			return res;
+		}
+	} else if (res < 0) {
 		return res;
+	}
 
 	session->keep_alive_in_progress = 1;
 	client->request.is_pending = 1;
@@ -588,6 +597,7 @@ static int send_teardown(struct rtsp_client *client,
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(session_id[0] == '\0', EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(client->cbs.teardown_resp == NULL, ENOSYS);
 	ULOG_ERRNO_RETURN_ERR_IF(
 		client->methods_allowed != 0 &&
@@ -617,7 +627,7 @@ static int send_teardown(struct rtsp_client *client,
 	client->request.userdata = req_userdata;
 	client->request.header.method = RTSP_METHOD_TYPE_TEARDOWN;
 
-	if (resource_url != NULL) {
+	if (resource_url != NULL && resource_url[0] != '\0') {
 		res = format_request_uri(client,
 					 session->content_base,
 					 resource_url,
@@ -874,7 +884,13 @@ static void teardown_request_complete(struct rtsp_client *client,
 		goto out;
 	}
 	media = rtsp_client_session_media_find(client, session, path);
-	if ((media == NULL) && (strcmp(path, base_path) != 0)) {
+	/* rtsp_url_parse_path() leaves path/base_path NULL (not an error) for
+	 * a URI with an empty path (e.g. a bare "rtsp://host:port/"), so
+	 * strcmp() cannot be called on them directly; treat NULL as "" for
+	 * this comparison, matching rtsp_server_teardown()'s own explicit
+	 * `(path == NULL) || (path[0] == '\0')` handling of the same case. */
+	if ((media == NULL) &&
+	    (strcmp(path ? path : "", base_path ? base_path : "") != 0)) {
 		ULOGE("%s: media '%s' not found", __func__, path);
 		goto out;
 	}
@@ -1494,7 +1510,7 @@ out:
 
 
 static int rtsp_client_interleaved_process(struct rtsp_client *client,
-					   struct rtsp_message *msg)
+					   const struct rtsp_message *msg)
 {
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(msg == NULL, EINVAL);
@@ -1685,16 +1701,18 @@ static int rtsp_client_response_process(struct rtsp_client *client,
 }
 
 
-static void tskt_client_data_cb(struct tskt_client *self,
+static void tskt_client_data_cb(struct tskt_client *ctx,
 				struct tpkt_packet *pkt,
 				void *userdata)
 {
+	UNUSED(ctx);
+
 	int res;
 	int err;
 	size_t len = 0;
 	const void *cdata = NULL;
 	struct rtsp_message msg;
-	struct pomp_buffer *buf = NULL;
+	const struct pomp_buffer *buf = NULL;
 	memset(&msg, 0x0, sizeof(msg));
 	struct rtsp_client *client = userdata;
 
@@ -1933,7 +1951,7 @@ int rtsp_client_destroy(struct rtsp_client *client)
 	}
 
 	if (client->ttls_init) {
-		int err = ttls_deinit();
+		err = ttls_deinit();
 		if (err < 0)
 			ULOG_ERRNO("ttls_deinit", -err);
 	}
@@ -2029,7 +2047,6 @@ int rtsp_client_connect(struct rtsp_client *client, const char *addr)
 {
 	int res = 0;
 	const char *host = NULL;
-	const char *user = NULL;
 	uint16_t port = 0;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
@@ -2049,7 +2066,6 @@ int rtsp_client_connect(struct rtsp_client *client, const char *addr)
 
 	host = rtsp_url_get_host(client->remote.url);
 	port = rtsp_url_get_port(client->remote.url);
-	user = rtsp_url_get_user(client->remote.url);
 
 	rtsp_url_strip_credentials(addr, &client->remote.url_str);
 
@@ -2376,7 +2392,9 @@ int rtsp_client_setup(struct rtsp_client *client,
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(content_base == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(content_base[0] == '\0', EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(resource_url == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(resource_url[0] == '\0', EINVAL);
 	if (lower_transport == RTSP_LOWER_TRANSPORT_TCP) {
 		ULOG_ERRNO_RETURN_ERR_IF(
 			(client_stream_port != 0) &&
@@ -2417,7 +2435,7 @@ int rtsp_client_setup(struct rtsp_client *client,
 
 	/* If a session id is passed, make sure that we know the session,
 	 * and that its content_base is the right one */
-	if (session_id != NULL) {
+	if (session_id != NULL && session_id[0] != '\0') {
 		const struct rtsp_client_session *session =
 			rtsp_client_get_session(client, session_id, 0);
 		if (!session) {
@@ -2527,6 +2545,7 @@ int rtsp_client_play(struct rtsp_client *client,
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(session_id[0] == '\0', EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(range == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(client->cbs.play_resp == NULL, ENOSYS);
 	ULOG_ERRNO_RETURN_ERR_IF(
@@ -2598,6 +2617,7 @@ int rtsp_client_pause(struct rtsp_client *client,
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(session_id[0] == '\0', EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(range == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(client->cbs.pause_resp == NULL, ENOSYS);
 	ULOG_ERRNO_RETURN_ERR_IF(
@@ -2663,10 +2683,11 @@ int rtsp_client_record(struct rtsp_client *client,
 {
 	int res = 0;
 	int keep_alive_in_progress = 0;
-	struct rtsp_client_session *session;
+	const struct rtsp_client_session *session;
 
 	ULOG_ERRNO_RETURN_ERR_IF(client == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(session_id == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(session_id[0] == '\0', EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(range == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(client->cbs.record_resp == NULL, ENOSYS);
 	ULOG_ERRNO_RETURN_ERR_IF(
@@ -2743,7 +2764,7 @@ int rtsp_client_send_interleaved(struct rtsp_client *client,
 	if (!client->channel_used[channel])
 		return -ENOENT;
 
-	info.channel = (uint8_t)channel;
+	info.channel = channel;
 	info.data = data;
 	info.len = (uint16_t)len;
 

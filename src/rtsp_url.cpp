@@ -49,7 +49,7 @@ std::unique_ptr<RtspUrl> RtspUrl::create(const std::string &url)
 
 
 RtspUrl::RtspUrl(const std::string &url) :
-		mParsedUrl(nullptr, rtsp_url_free), mOriginalUrl(url)
+		mParsedUrl(nullptr, &rtsp_url_free), mOriginalUrl(url)
 {
 	struct rtsp_url *parsed = nullptr;
 

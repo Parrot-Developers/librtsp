@@ -105,9 +105,10 @@ int rtsp_base64_decode(const char *str, void **out, size_t *out_size)
 	ULOG_ERRNO_RETURN_ERR_IF(out_size == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(str == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(str[0] == '\0', EINVAL);
-	size_t n = strnlen(str, MAX_RTSP_BASE64_LEN);
-	ULOG_ERRNO_RETURN_ERR_IF(n == MAX_RTSP_BASE64_LEN, EINVAL);
-	ULOG_ERRNO_RETURN_ERR_IF((n % 4) != 0, EINVAL);
+	size_t n = strnlen(str, MAX_RTSP_BASE64_LEN + 1);
+	ULOG_ERRNO_RETURN_ERR_IF(n > MAX_RTSP_BASE64_LEN, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(n == 0 || (n % 4) != 0, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(n < 4, EINVAL);
 
 	size_t padding = 0;
 	size_t i;

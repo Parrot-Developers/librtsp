@@ -25,8 +25,8 @@
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef _RTMP_TEST_H_
-#define _RTMP_TEST_H_
+#ifndef _RTSP_TEST_H_
+#define _RTSP_TEST_H_
 
 #include <rtsp/rtsp.h>
 
@@ -45,10 +45,23 @@
 #define FN(_name) ((char *)_name)
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif /* __cplusplus */
+
 extern CU_TestInfo g_rtsp_test_auth[];
 extern CU_TestInfo g_rtsp_test_base64[];
 extern CU_TestInfo g_rtsp_test_url_c[];
 extern CU_TestInfo g_rtsp_test_url_cpp[];
+extern CU_TestInfo g_rtsp_test_common[];
+extern CU_TestInfo g_rtsp_test_header[];
+extern CU_TestInfo g_rtsp_test_message[];
+extern CU_TestInfo g_rtsp_test_loopback[];
+extern CU_TestInfo g_rtsp_test_tls[];
+
+#ifdef __cplusplus
+}
+#endif /* __cplusplus */
 
 
-#endif /* _RTMP_TEST_H_ */
+#endif /* _RTSP_TEST_H_ */

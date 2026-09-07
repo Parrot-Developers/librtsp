@@ -55,6 +55,7 @@ struct rtsp_server_session {
 	unsigned int timeout_ms;
 	struct pomp_timer *timer;
 	int playing;
+	int recording;
 	struct rtsp_range range;
 	float scale;
 
@@ -85,6 +86,8 @@ struct rtsp_server_pending_request {
 	int request_first_reply;
 	int in_callback;
 	int replied;
+	char *body;
+	size_t body_len;
 
 	/* Medias */
 	unsigned int media_count;

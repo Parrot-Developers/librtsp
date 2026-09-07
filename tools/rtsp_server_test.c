@@ -100,6 +100,7 @@ static void describe_cb(struct rtsp_server *server,
 {
 	UNUSED(ext);
 	UNUSED(ext_count);
+	UNUSED(userdata);
 
 	int ret = 0;
 	int err;
@@ -480,6 +481,7 @@ int main(int argc, char **argv)
 {
 	int status = EXIT_SUCCESS;
 	int err;
+	int parsedint;
 	uint16_t port = 0;
 
 	s_stopping = 0;
@@ -493,7 +495,13 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	port = atoi(argv[1]);
+	parsedint = atoi(argv[1]);
+	if (parsedint > 0 && parsedint <= UINT16_MAX) {
+		port = (uint16_t)parsedint;
+	} else {
+		usage(argv[0]);
+		exit(EXIT_FAILURE);
+	}
 
 	signal(SIGINT, sighandler);
 

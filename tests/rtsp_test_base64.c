@@ -200,9 +200,110 @@ static void test_rtsp_base64_decode(void)
 }
 
 
+static void test_rtsp_base64_alphabet(void)
+{
+	/* The 64-entry base64 alphabet, one byte per encoded character to
+	 * cover the full 6-bit value range without ambiguity */
+	static const char alphabet[] =
+		"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		"abcdefghijklmnopqrstuvwxyz"
+		"0123456789+/";
+	CU_ASSERT_EQUAL_FATAL(strlen(alphabet), (size_t)64);
+
+	for (size_t v = 0; v < 64; v++) {
+		/* Encode a single 6-bit value (left-aligned in a 3-byte
+		 * group) and check the corresponding alphabet character
+		 * comes out first, with the rest zero-padded */
+		uint8_t data[3] = {(uint8_t)(v << 2), 0, 0};
+		char *out = NULL;
+		int ret = rtsp_base64_encode(data, sizeof(data), &out);
+		CU_ASSERT_EQUAL(ret, 0);
+		CU_ASSERT_PTR_NOT_NULL_FATAL(out);
+		CU_ASSERT_EQUAL(out[0], alphabet[v]);
+		free(out);
+	}
+}
+
+
+static void test_rtsp_base64_round_trip(void)
+{
+	static const size_t max_in = (MAX_RTSP_BASE64_LEN / 4) * 3;
+	uint8_t *data = malloc(max_in);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(data);
+	for (size_t i = 0; i < max_in; i++)
+		data[i] = (uint8_t)(i * 31 + 7);
+
+	for (size_t len = 1; len <= max_in; len++) {
+		char *encoded = NULL;
+		void *decoded = NULL;
+		size_t decoded_len = 0;
+		int ret;
+
+		ret = rtsp_base64_encode(data, len, &encoded);
+		CU_ASSERT_EQUAL_FATAL(ret, 0);
+		CU_ASSERT_PTR_NOT_NULL_FATAL(encoded);
+
+		ret = rtsp_base64_decode(encoded, &decoded, &decoded_len);
+		CU_ASSERT_EQUAL(ret, 0);
+		CU_ASSERT_PTR_NOT_NULL_FATAL(decoded);
+		CU_ASSERT_EQUAL(decoded_len, len);
+		CU_ASSERT_EQUAL(memcmp(decoded, data, len), 0);
+
+		free(encoded);
+		free(decoded);
+	}
+
+	free(data);
+}
+
+
+/*
+ * Regression test for a bug found while writing this suite:
+ * rtsp_base64_decode() computed 'n' via strnlen(str, MAX_RTSP_BASE64_LEN),
+ * then rejected whenever n == MAX_RTSP_BASE64_LEN - but strnlen() caps its
+ * result at the length given, so a string of exactly MAX_RTSP_BASE64_LEN
+ * characters and one that is actually longer both read back as
+ * n == MAX_RTSP_BASE64_LEN, indistinguishably. This meant the longest
+ * output rtsp_base64_encode() can ever produce (exactly MAX_RTSP_BASE64_LEN
+ * characters, for a 3072-byte input) could never be decoded back. Fixed by
+ * capping strnlen() one character past the limit instead.
+ */
+static void test_rtsp_base64_decode_max_len_regression(void)
+{
+	static const size_t max_in = (MAX_RTSP_BASE64_LEN / 4) * 3;
+	uint8_t *data = calloc(max_in, 1);
+	char *encoded = NULL;
+	void *decoded = NULL;
+	size_t decoded_len = 0;
+	int ret;
+
+	CU_ASSERT_PTR_NOT_NULL_FATAL(data);
+	memset(data, 0xaa, max_in);
+
+	ret = rtsp_base64_encode(data, max_in, &encoded);
+	CU_ASSERT_EQUAL_FATAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(encoded);
+	CU_ASSERT_EQUAL_FATAL(strlen(encoded), (size_t)MAX_RTSP_BASE64_LEN);
+
+	ret = rtsp_base64_decode(encoded, &decoded, &decoded_len);
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(decoded);
+	CU_ASSERT_EQUAL(decoded_len, max_in);
+	CU_ASSERT_EQUAL(memcmp(decoded, data, max_in), 0);
+
+	free(data);
+	free(encoded);
+	free(decoded);
+}
+
+
 CU_TestInfo g_rtsp_test_base64[] = {
 	{FN("rtsp-base64-encode"), &test_rtsp_base64_encode},
 	{FN("rtsp-base64-decode"), &test_rtsp_base64_decode},
+	{FN("rtsp-base64-alphabet"), &test_rtsp_base64_alphabet},
+	{FN("rtsp-base64-round-trip"), &test_rtsp_base64_round_trip},
+	{FN("rtsp-base64-decode-max-len-regression"),
+	 &test_rtsp_base64_decode_max_len_regression},
 
 	CU_TEST_INFO_NULL,
 };

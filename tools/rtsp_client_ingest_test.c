@@ -54,6 +54,8 @@ static inline const char *strsignal(int signum)
 #define CONTROL_PORT 55005
 #define CONTROL_CHANNEL 1
 
+#define UNUSED(x) (void)(x)
+
 
 static const struct rtsp_header_ext header_ext[] = {
 	{
@@ -253,6 +255,9 @@ static void teardown_req(struct app *app)
 
 static void ready_to_send_cb(struct rtsp_client *client, void *userdata)
 {
+	UNUSED(client);
+	UNUSED(userdata);
+
 	ULOGI("%s", __func__);
 }
 
@@ -263,6 +268,10 @@ static void interleaved_data_cb(struct rtsp_client *client,
 				size_t len,
 				void *userdata)
 {
+	UNUSED(client);
+	UNUSED(data);
+	UNUSED(userdata);
+
 	ULOGI("%s: channel=%u, len=%zu", __func__, channel, len);
 }
 
@@ -271,6 +280,8 @@ static void connection_state_cb(struct rtsp_client *client,
 				enum rtsp_client_conn_state state,
 				void *userdata)
 {
+	UNUSED(client);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -290,6 +301,9 @@ static void session_removed_cb(struct rtsp_client *client,
 			       int status,
 			       void *userdata)
 {
+	UNUSED(client);
+	UNUSED(userdata);
+
 	ULOGI("session %s removed, status=%d(%s)",
 	      session_id,
 	      -status,
@@ -306,7 +320,12 @@ static void options_resp_cb(struct rtsp_client *client,
 			    void *userdata,
 			    void *req_userdata)
 {
-	struct app *app = userdata;
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
+	const struct app *app = userdata;
 	if (!app)
 		return;
 
@@ -340,6 +359,16 @@ static void describe_resp_cb(struct rtsp_client *client,
 			     void *userdata,
 			     void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(req_status);
+	UNUSED(status);
+	UNUSED(content_base);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(sdp);
+	UNUSED(userdata);
+	UNUSED(req_userdata);
+
 	ULOGI("%s", __func__);
 }
 
@@ -352,6 +381,11 @@ static void announce_resp_cb(struct rtsp_client *client,
 			     void *userdata,
 			     void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -395,6 +429,11 @@ static void setup_resp_cb(struct rtsp_client *client,
 			  void *userdata,
 			  void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -450,6 +489,21 @@ static void play_resp_cb(struct rtsp_client *client,
 			 void *userdata,
 			 void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(req_status);
+	UNUSED(status);
+	UNUSED(range);
+	UNUSED(scale);
+	UNUSED(seq_valid);
+	UNUSED(seq);
+	UNUSED(rtptime_valid);
+	UNUSED(rtptime);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+	UNUSED(req_userdata);
+
 	ULOGI("%s", __func__);
 }
 
@@ -464,6 +518,16 @@ static void pause_resp_cb(struct rtsp_client *client,
 			  void *userdata,
 			  void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(req_status);
+	UNUSED(status);
+	UNUSED(range);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+	UNUSED(req_userdata);
+
 	ULOGI("%s", __func__);
 }
 
@@ -477,6 +541,11 @@ static void record_resp_cb(struct rtsp_client *client,
 			   void *userdata,
 			   void *req_userdata)
 {
+	UNUSED(session_id);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -517,6 +586,12 @@ static void teardown_resp_cb(struct rtsp_client *client,
 			     void *userdata,
 			     void *req_userdata)
 {
+	UNUSED(client);
+	UNUSED(session_id);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(req_userdata);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -551,6 +626,12 @@ static void announce_cb(struct rtsp_client *client,
 			const char *sdp,
 			void *userdata)
 {
+	UNUSED(client);
+	UNUSED(path);
+	UNUSED(ext);
+	UNUSED(ext_count);
+	UNUSED(userdata);
+
 	ULOGI("%s: sdp:\n%s", __func__, sdp);
 }
 
@@ -574,6 +655,8 @@ static const struct rtsp_client_cbs cbs = {
 
 static void timer_cb(struct pomp_timer *timer, void *userdata)
 {
+	UNUSED(timer);
+
 	struct app *app = userdata;
 	if (!app)
 		return;
@@ -608,7 +691,7 @@ int main(int argc, char **argv)
 	int status = EXIT_SUCCESS;
 	int res = 0;
 	int argidx = 0;
-	char *url;
+	const char *url;
 
 	memset(&s_app, 0, sizeof(s_app));
 
@@ -650,7 +733,6 @@ int main(int argc, char **argv)
 	}
 
 	if (rtsp_url_get_path(s_app.url) == NULL) {
-		res = -EINVAL;
 		ULOGE("missing path in URL");
 		status = EXIT_FAILURE;
 		goto cleanup;

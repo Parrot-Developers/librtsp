@@ -95,8 +95,8 @@
 
 #define MAKE_KO_URL(_url)                                                      \
 	MAKE_URL(_url,                                                         \
-		 RTSP_URL_SCHEME_UNKNOWN,                                      \
 		 false,                                                        \
+		 RTSP_URL_SCHEME_UNKNOWN,                                      \
 		 NULL,                                                         \
 		 NULL,                                                         \
 		 0,                                                            \
@@ -961,12 +961,195 @@ static void test_rtsp_url_anonymize(void)
 }
 
 
+static void test_rtsp_url_scheme_from_str(void)
+{
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str(NULL),
+			RTSP_URL_SCHEME_UNKNOWN);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str(""), RTSP_URL_SCHEME_UNKNOWN);
+	/* Exact match required, including the "://" suffix */
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("rtsp"),
+			RTSP_URL_SCHEME_UNKNOWN);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("bogus://"),
+			RTSP_URL_SCHEME_UNKNOWN);
+
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("rtsp://"),
+			RTSP_URL_SCHEME_TCP);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("rtspu://"),
+			RTSP_URL_SCHEME_UDP);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("rtsps://"),
+			RTSP_URL_SCHEME_TCP_TLS);
+
+	/* Case-insensitive */
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("RTSP://"),
+			RTSP_URL_SCHEME_TCP);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_from_str("RtSpU://"),
+			RTSP_URL_SCHEME_UDP);
+}
+
+
+static void test_rtsp_url_scheme_default_port(void)
+{
+	CU_ASSERT_EQUAL(rtsp_url_scheme_default_port(RTSP_URL_SCHEME_TCP),
+			(uint16_t)554);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_default_port(RTSP_URL_SCHEME_UDP),
+			(uint16_t)554);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_default_port(RTSP_URL_SCHEME_TCP_TLS),
+			(uint16_t)322);
+	CU_ASSERT_EQUAL(rtsp_url_scheme_default_port(RTSP_URL_SCHEME_UNKNOWN),
+			(uint16_t)0);
+	CU_ASSERT_EQUAL(
+		rtsp_url_scheme_default_port((enum rtsp_url_scheme)9999),
+		(uint16_t)0);
+}
+
+
+static void test_rtsp_url_scheme_str_unknown(void)
+{
+	/* Unlike most other *_str() helpers in this library,
+	 * rtsp_url_scheme_str() returns NULL (not an "UNKNOWN" string) for
+	 * an unrecognized value - there is no map entry for
+	 * RTSP_URL_SCHEME_UNKNOWN itself. */
+	CU_ASSERT_PTR_NULL(rtsp_url_scheme_str(RTSP_URL_SCHEME_UNKNOWN));
+	CU_ASSERT_PTR_NULL(rtsp_url_scheme_str((enum rtsp_url_scheme)9999));
+}
+
+
+static void test_rtsp_url_parse_to_str_round_trip(void)
+{
+	/* parse -> to_str -> re-parse must yield an equivalent URL, for
+	 * every valid URL already exercised by test_rtsp_url_parse() */
+	for (size_t i = 0; i < SIZEOF_ARRAY(test_cases_parse_ok_map); i++) {
+		struct rtsp_url *parsed = NULL;
+		struct rtsp_url *reparsed = NULL;
+		char *str = NULL;
+		int ret;
+
+		ret = rtsp_url_parse(test_cases_parse_ok_map[i].url, &parsed);
+		CU_ASSERT_EQUAL_FATAL(ret, 0);
+
+		ret = rtsp_url_to_str(parsed, &str);
+		CU_ASSERT_EQUAL(ret, 0);
+		CU_ASSERT_PTR_NOT_NULL_FATAL(str);
+
+		ret = rtsp_url_parse(str, &reparsed);
+		CU_ASSERT_EQUAL(ret, 0);
+		CU_ASSERT_PTR_NOT_NULL_FATAL(reparsed);
+
+		CU_ASSERT_TRUE(rtsp_url_cmp(parsed, reparsed));
+
+		free(str);
+		rtsp_url_free(parsed);
+		rtsp_url_free(reparsed);
+	}
+}
+
+
+static void test_rtsp_url_resolved_host(void)
+{
+	struct rtsp_url *url = NULL;
+	char *str = NULL;
+	int ret;
+
+	ret = rtsp_url_set_resolved_host(NULL, "1.2.3.4");
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+
+	ret = rtsp_url_parse("rtsp://host.example.com/stream", &url);
+	CU_ASSERT_EQUAL_FATAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(url);
+
+	/* A non-numeric host is not auto-resolved */
+	CU_ASSERT_FALSE(rtsp_url_has_resolved_host(url));
+	CU_ASSERT_PTR_NULL(rtsp_url_get_resolved_host(url));
+
+	ret = rtsp_url_set_resolved_host(url, NULL);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+
+	ret = rtsp_url_set_resolved_host(url, "1.2.3.4");
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_TRUE(rtsp_url_has_resolved_host(url));
+	ASSERT_STR_EQ(rtsp_url_get_resolved_host(url), "1.2.3.4");
+
+	/* Setting it again replaces the previous value */
+	ret = rtsp_url_set_resolved_host(url, "5.6.7.8");
+	CU_ASSERT_EQUAL(ret, 0);
+	ASSERT_STR_EQ(rtsp_url_get_resolved_host(url), "5.6.7.8");
+
+	/* to_str() (non-resolved) still uses the original hostname */
+	ret = rtsp_url_to_str(url, &str);
+	CU_ASSERT_EQUAL(ret, 0);
+	ASSERT_STR_EQ(str, "rtsp://host.example.com/stream");
+	free(str);
+	str = NULL;
+
+	/* to_str_resolved() uses the resolved host instead */
+	ret = rtsp_url_to_str_resolved(url, &str);
+	CU_ASSERT_EQUAL(ret, 0);
+	ASSERT_STR_EQ(str, "rtsp://5.6.7.8/stream");
+	free(str);
+	str = NULL;
+
+	/* to_str_no_path() drops the path, keeps the original host */
+	ret = rtsp_url_to_str_no_path(url, &str);
+	CU_ASSERT_EQUAL(ret, 0);
+	ASSERT_STR_EQ(str, "rtsp://host.example.com");
+	free(str);
+	str = NULL;
+
+	/* to_str_no_path_resolved() combines both */
+	ret = rtsp_url_to_str_no_path_resolved(url, &str);
+	CU_ASSERT_EQUAL(ret, 0);
+	ASSERT_STR_EQ(str, "rtsp://5.6.7.8");
+	free(str);
+	str = NULL;
+
+	/* KO cases: all four to_str variants share the same argument
+	 * validation */
+	ret = rtsp_url_to_str(NULL, &str);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+	ret = rtsp_url_to_str(url, NULL);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+	ret = rtsp_url_to_str_resolved(NULL, &str);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+	ret = rtsp_url_to_str_no_path(NULL, &str);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+	ret = rtsp_url_to_str_no_path_resolved(NULL, &str);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+
+	rtsp_url_free(url);
+}
+
+
+static void test_rtsp_url_resolved_host_ip_literal_auto_resolves(void)
+{
+	struct rtsp_url *url = NULL;
+	int ret;
+
+	/* An IPv4/IPv6 literal host needs no DNS resolution, so
+	 * rtsp_url_parse() auto-populates resolved_host with a copy of the
+	 * literal itself */
+	ret = rtsp_url_parse("rtsp://192.168.1.1/stream", &url);
+	CU_ASSERT_EQUAL_FATAL(ret, 0);
+	CU_ASSERT_TRUE(rtsp_url_has_resolved_host(url));
+	ASSERT_STR_EQ(rtsp_url_get_resolved_host(url), "192.168.1.1");
+	rtsp_url_free(url);
+}
+
+
 CU_TestInfo g_rtsp_test_url_c[] = {
 	{FN("rtsp-url-parse"), &test_rtsp_url_parse},
 	{FN("rtsp-url-copy"), &test_rtsp_url_copy},
 	{FN("rtsp-url-cmp"), &test_rtsp_url_cmp},
 	{FN("rtsp-url-strip-credentials"), &test_rtsp_url_strip_credentials},
 	{FN("rtsp-url-anonymize"), &test_rtsp_url_anonymize},
+	{FN("rtsp-url-scheme-from-str"), &test_rtsp_url_scheme_from_str},
+	{FN("rtsp-url-scheme-default-port"),
+	 &test_rtsp_url_scheme_default_port},
+	{FN("rtsp-url-scheme-str-unknown"), &test_rtsp_url_scheme_str_unknown},
+	{FN("rtsp-url-parse-to-str-round-trip"),
+	 &test_rtsp_url_parse_to_str_round_trip},
+	{FN("rtsp-url-resolved-host"), &test_rtsp_url_resolved_host},
+	{FN("rtsp-url-resolved-host-ip-literal-auto-resolves"),
+	 &test_rtsp_url_resolved_host_ip_literal_auto_resolves},
 
 	CU_TEST_INFO_NULL,
 };

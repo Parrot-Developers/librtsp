@@ -28,6 +28,8 @@
 #include "rtsp_priv.h"
 #include "rtsp_test.h"
 
+#include <ctype.h>
+
 
 static void test_rtsp_auth_type_from_to_str(void)
 {
@@ -254,6 +256,20 @@ static void test_rtsp_auth_generate_basic_response(void)
 	ret = rtsp_auth_generate_basic_response(&auth, "password");
 	CU_ASSERT_EQUAL(ret, -EINVAL);
 
+	/* Password NULL */
+	memset(&auth, 0, sizeof(auth));
+	auth.type = RTSP_AUTH_TYPE_BASIC;
+	auth.username = (char *)"admin";
+	ret = rtsp_auth_generate_basic_response(&auth, NULL);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+
+	/* Wrong auth type */
+	memset(&auth, 0, sizeof(auth));
+	auth.type = RTSP_AUTH_TYPE_DIGEST;
+	auth.username = (char *)"admin";
+	ret = rtsp_auth_generate_basic_response(&auth, "password");
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+
 	/* OK cases */
 	for (size_t i = 0; i < SIZEOF_ARRAY(cases); i++) {
 		memset(&auth, 0, sizeof(auth));
@@ -356,6 +372,96 @@ static void test_rtsp_auth_generate_digest_response(void)
 					.realm = "RTSP",
 					.nonce = "ok",
 					.uri = NULL,
+				},
+			.pass = "admin",
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Missing username */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_DIGEST,
+					.username = NULL,
+					.realm = "a",
+					.uri = "a",
+					.nonce = "nonce_ok",
+				},
+			.pass = "admin",
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Missing realm */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_DIGEST,
+					.username = "a",
+					.realm = NULL,
+					.uri = "a",
+					.nonce = "nonce_ok",
+				},
+			.pass = "admin",
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Missing password */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_DIGEST,
+					.username = "a",
+					.realm = "a",
+					.uri = "a",
+					.nonce = "nonce_ok",
+				},
+			.pass = NULL,
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Empty (not missing) nonce */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_DIGEST,
+					.username = "a",
+					.realm = "a",
+					.uri = "a",
+					.nonce = "",
+				},
+			.pass = "admin",
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Wrong auth type */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_BASIC,
+					.username = "a",
+					.realm = "a",
+					.uri = "a",
+					.nonce = "nonce_ok",
+				},
+			.pass = "admin",
+			.method = RTSP_METHOD_TYPE_DESCRIBE,
+			.expected_ret = -EINVAL,
+		},
+		{
+			/* Too long cnonce (>64) */
+			.auth =
+				{
+					.type = RTSP_AUTH_TYPE_DIGEST,
+					.username = "a",
+					.realm = "a",
+					.uri = "a",
+					.nonce = "nonce_ok",
+					/* 65 chars, one more than the max
+					 * allowed (64) */
+					.cnonce =
+						"012345678901234567890123456789"
+						"012"
+						"34567890123456789012345678901234",
 				},
 			.pass = "admin",
 			.method = RTSP_METHOD_TYPE_DESCRIBE,
@@ -620,6 +726,175 @@ static void test_rtsp_auth_generate_digest_response(void)
 }
 
 
+static void test_rtsp_auth_generate_digest_response_auto_cnonce(void)
+{
+	struct rtsp_authorization_header auth1, auth2;
+	int ret;
+
+	memset(&auth1, 0, sizeof(auth1));
+	auth1.type = RTSP_AUTH_TYPE_DIGEST;
+	auth1.algorithm = RTSP_AUTH_ALGORITHM_MD5;
+	auth1.qop = RTSP_AUTH_QOP_AUTH;
+	auth1.username = strdup("admin");
+	auth1.realm = strdup("RTSP");
+	auth1.nonce = strdup("dcd98b7102dd2f0e8b11d0f600bfb0c093");
+	auth1.uri = strdup("rtsp://127.0.0.1/test");
+	/* auth1.cnonce left NULL: must be auto-generated */
+
+	ret = rtsp_auth_generate_digest_response(
+		&auth1, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(auth1.cnonce);
+	CU_ASSERT_EQUAL(strlen(auth1.cnonce), (size_t)16);
+	for (size_t i = 0; i < strlen(auth1.cnonce); i++)
+		CU_ASSERT_TRUE(isxdigit((unsigned char)auth1.cnonce[i]));
+
+	/* A second, independent call generates a different cnonce */
+	memset(&auth2, 0, sizeof(auth2));
+	auth2.type = RTSP_AUTH_TYPE_DIGEST;
+	auth2.algorithm = RTSP_AUTH_ALGORITHM_MD5;
+	auth2.qop = RTSP_AUTH_QOP_AUTH;
+	auth2.username = strdup("admin");
+	auth2.realm = strdup("RTSP");
+	auth2.nonce = strdup("dcd98b7102dd2f0e8b11d0f600bfb0c093");
+	auth2.uri = strdup("rtsp://127.0.0.1/test");
+
+	ret = rtsp_auth_generate_digest_response(
+		&auth2, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(auth2.cnonce);
+	CU_ASSERT_NOT_EQUAL(strcmp(auth1.cnonce, auth2.cnonce), 0);
+
+	free(auth1.username);
+	free(auth1.realm);
+	free(auth1.nonce);
+	free(auth1.uri);
+	free(auth1.cnonce);
+	free(auth1.response);
+	free(auth2.username);
+	free(auth2.realm);
+	free(auth2.nonce);
+	free(auth2.uri);
+	free(auth2.cnonce);
+	free(auth2.response);
+}
+
+
+static void test_rtsp_auth_generate_digest_response_nc_wraparound(void)
+{
+	struct rtsp_authorization_header auth;
+	int ret;
+
+	memset(&auth, 0, sizeof(auth));
+	auth.type = RTSP_AUTH_TYPE_DIGEST;
+	auth.algorithm = RTSP_AUTH_ALGORITHM_MD5;
+	auth.qop = RTSP_AUTH_QOP_AUTH;
+	auth.username = strdup("admin");
+	auth.realm = strdup("RTSP");
+	auth.nonce = strdup("dcd98b7102dd2f0e8b11d0f600bfb0c093");
+	auth.uri = strdup("rtsp://127.0.0.1/test");
+	auth.cnonce = strdup("0a4f113b");
+	auth.nc = UINT32_MAX;
+
+	ret = rtsp_auth_generate_digest_response(
+		&auth, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, 0);
+	/* auth.nc++ wraps UINT32_MAX to 0, which is then bumped to 1 rather
+	 * than left at 0 (nc=0 would be an invalid/unused request counter) */
+	CU_ASSERT_EQUAL(auth.nc, (unsigned int)1);
+
+	free(auth.username);
+	free(auth.realm);
+	free(auth.nonce);
+	free(auth.uri);
+	free(auth.cnonce);
+	free(auth.response);
+}
+
+
+static void test_rtsp_auth_generate_digest_response_buffer_reuse(void)
+{
+	struct rtsp_authorization_header auth;
+	char *first_response;
+	int ret;
+
+	memset(&auth, 0, sizeof(auth));
+	auth.type = RTSP_AUTH_TYPE_DIGEST;
+	auth.algorithm = RTSP_AUTH_ALGORITHM_MD5;
+	auth.qop = RTSP_AUTH_QOP_AUTH;
+	auth.username = strdup("admin");
+	auth.realm = strdup("RTSP");
+	auth.nonce = strdup("dcd98b7102dd2f0e8b11d0f600bfb0c093");
+	auth.uri = strdup("rtsp://127.0.0.1/test");
+	auth.cnonce = strdup("0a4f113b");
+
+	ret = rtsp_auth_generate_digest_response(
+		&auth, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(auth.response);
+	first_response = auth.response;
+
+	/* A second call on the same auth, with a different nonce, must
+	 * reuse the same response buffer (not leak the old one) while
+	 * updating its content. nc is reset to 0 to match the exact
+	 * preconditions of the "Nonce has changed" vector above (nc_in=0
+	 * -> nc=1), since the first call already bumped it to 1. */
+	free(auth.nonce);
+	auth.nonce = strdup("7df922e86448376f9d2737609201a45");
+	auth.nc = 0;
+	ret = rtsp_auth_generate_digest_response(
+		&auth, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, 0);
+	CU_ASSERT_PTR_EQUAL(auth.response, first_response);
+	CU_ASSERT_STRING_EQUAL(auth.response,
+			       "870a85065a7fa9ac995acab6efe57b96");
+
+	free(auth.username);
+	free(auth.realm);
+	free(auth.nonce);
+	free(auth.uri);
+	free(auth.cnonce);
+	free(auth.response);
+}
+
+
+static void test_rtsp_auth_generate_digest_response_md5_hex_fmt_overflow(void)
+{
+	struct rtsp_authorization_header auth;
+	char *huge_username;
+	int ret;
+
+	/* HA1 = MD5(username:realm:password) is formatted into a fixed
+	 * 1024-byte buffer inside md5_hex_fmt(); an oversized username
+	 * overflows it and must be rejected, not truncated */
+	huge_username = malloc(2000);
+	CU_ASSERT_PTR_NOT_NULL_FATAL(huge_username);
+	memset(huge_username, 'a', 1999);
+	huge_username[1999] = '\0';
+
+	memset(&auth, 0, sizeof(auth));
+	auth.type = RTSP_AUTH_TYPE_DIGEST;
+	auth.algorithm = RTSP_AUTH_ALGORITHM_MD5;
+	auth.qop = RTSP_AUTH_QOP_AUTH;
+	auth.username = huge_username;
+	auth.realm = strdup("RTSP");
+	auth.nonce = strdup("dcd98b7102dd2f0e8b11d0f600bfb0c093");
+	auth.uri = strdup("rtsp://127.0.0.1/test");
+	auth.cnonce = strdup("0a4f113b");
+
+	ret = rtsp_auth_generate_digest_response(
+		&auth, "admin", RTSP_METHOD_TYPE_DESCRIBE);
+	CU_ASSERT_EQUAL(ret, -EINVAL);
+	CU_ASSERT_PTR_NULL(auth.response);
+
+	free(huge_username);
+	free(auth.realm);
+	free(auth.nonce);
+	free(auth.uri);
+	free(auth.cnonce);
+}
+
+
 CU_TestInfo g_rtsp_test_auth[] = {
 	{FN("rtsp-auth-type-from-to-str"), &test_rtsp_auth_type_from_to_str},
 	{FN("rtsp-auth-algorithm-from-to-str"),
@@ -630,6 +905,14 @@ CU_TestInfo g_rtsp_test_auth[] = {
 	 &test_rtsp_auth_generate_basic_response},
 	{FN("rtsp-auth-generate-digest-response"),
 	 &test_rtsp_auth_generate_digest_response},
+	{FN("rtsp-auth-generate-digest-response-auto-cnonce"),
+	 &test_rtsp_auth_generate_digest_response_auto_cnonce},
+	{FN("rtsp-auth-generate-digest-response-nc-wraparound"),
+	 &test_rtsp_auth_generate_digest_response_nc_wraparound},
+	{FN("rtsp-auth-generate-digest-response-buffer-reuse"),
+	 &test_rtsp_auth_generate_digest_response_buffer_reuse},
+	{FN("rtsp-auth-generate-digest-response-md5-hex-fmt-overflow"),
+	 &test_rtsp_auth_generate_digest_response_md5_hex_fmt_overflow},
 
 	CU_TEST_INFO_NULL,
 };
